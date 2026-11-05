@@ -2,7 +2,13 @@ import crypto from 'node:crypto';
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import { z } from 'zod';
 import { getDb } from '../db/database.js';
-import { requireAuth, requireAdmin } from '../middleware/auth.js';
+import {
+  clearAuthCookie,
+  extractApiKey,
+  requireAuth,
+  requireAdmin,
+  setAuthCookie,
+} from '../middleware/auth.js';
 import {
   createInviteQr,
   loginAdmin,
@@ -92,6 +98,7 @@ apiRouter.post('/auth/admin/login', (req: Request, res: Response, next: NextFunc
   try {
     const parsed = adminLoginSchema.parse(req.body);
     const result = loginAdmin(getDb(), parsed.username, parsed.password);
+    setAuthCookie(req, res, result.apiKey);
     res.status(200).json(result);
   } catch (err) {
     next(err);
@@ -99,7 +106,16 @@ apiRouter.post('/auth/admin/login', (req: Request, res: Response, next: NextFunc
 });
 
 apiRouter.get('/auth/me', requireAuth, (req: Request, res: Response) => {
+  const apiKey = extractApiKey(req);
+  if (apiKey) {
+    setAuthCookie(req, res, apiKey);
+  }
   res.status(200).json({ user: req.user });
+});
+
+apiRouter.post('/auth/logout', (_req: Request, res: Response) => {
+  clearAuthCookie(res);
+  res.status(204).send();
 });
 
 apiRouter.post(
@@ -132,6 +148,7 @@ apiRouter.post('/auth/join', (req: Request, res: Response, next: NextFunction) =
   try {
     const parsed = joinSchema.parse(req.body);
     const result = redeemInviteToken(getDb(), parsed.token, parsed.name);
+    setAuthCookie(req, res, result.apiKey);
     res.status(201).json(result);
   } catch (err) {
     next(err);

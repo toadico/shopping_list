@@ -102,8 +102,23 @@ describe('Integration Tests: Express API Routes, Security & Probes', () => {
       expect(joinRes.body.user.role).toBe('user');
       expect(joinRes.body.user.canManageUsers).toBe(true);
       const sarahKey = joinRes.body.apiKey;
+      const setCookieHeader = joinRes.headers['set-cookie'];
+      expect(setCookieHeader).toBeDefined();
+      expect(String(setCookieHeader)).toContain('shopping_list_api_key=');
+      expect(String(setCookieHeader)).toContain('HttpOnly');
 
-      // 4. Sarah can access /api/auth/me using X-API-Key or Bearer header
+      // 4. Sarah can access /api/auth/me using the HttpOnly cookie or X-API-Key/Bearer header, while URL ?apiKey= is rejected
+      const cookieMeRes = await request(app)
+        .get('/api/auth/me')
+        .set('Cookie', `shopping_list_api_key=${sarahKey}`);
+      expect(cookieMeRes.status).toBe(200);
+      expect(cookieMeRes.body.user.name).toBe('Sarah Connor');
+
+      const urlQueryKeyRes = await request(app).get(
+        `/api/auth/me?apiKey=${encodeURIComponent(sarahKey)}`
+      );
+      expect(urlQueryKeyRes.status).toBe(401);
+
       const meRes = await request(app)
         .get('/api/auth/me')
         .set('X-API-Key', sarahKey);

@@ -12,6 +12,50 @@ declare global {
   }
 }
 
+export const AUTH_COOKIE_NAME = 'shopping_list_api_key';
+
+function parseCookieHeader(cookieHeader?: string): Record<string, string> {
+  if (!cookieHeader) {
+    return {};
+  }
+  const cookies: Record<string, string> = {};
+  for (const part of cookieHeader.split(';')) {
+    const eqIdx = part.indexOf('=');
+    if (eqIdx === -1) {
+      continue;
+    }
+    const key = part.slice(0, eqIdx).trim();
+    const rawVal = part.slice(eqIdx + 1).trim();
+    if (key) {
+      try {
+        cookies[key] = decodeURIComponent(rawVal);
+      } catch {
+        cookies[key] = rawVal;
+      }
+    }
+  }
+  return cookies;
+}
+
+export function setAuthCookie(req: Request, res: Response, apiKey: string): void {
+  const isHttps = req.secure || req.headers['x-forwarded-proto'] === 'https';
+  res.cookie(AUTH_COOKIE_NAME, apiKey, {
+    httpOnly: true,
+    sameSite: 'strict',
+    secure: isHttps,
+    path: '/',
+    maxAge: 10 * 365 * 24 * 60 * 60 * 1000, // 10 years (non-expiring unless revoked)
+  });
+}
+
+export function clearAuthCookie(res: Response): void {
+  res.clearCookie(AUTH_COOKIE_NAME, {
+    httpOnly: true,
+    sameSite: 'strict',
+    path: '/',
+  });
+}
+
 export function extractApiKey(req: Request): string | undefined {
   const authHeader = req.headers.authorization;
   if (authHeader && authHeader.toLowerCase().startsWith('bearer ')) {
@@ -21,9 +65,10 @@ export function extractApiKey(req: Request): string | undefined {
   if (typeof xApiKey === 'string' && xApiKey.trim() !== '') {
     return xApiKey.trim();
   }
-  const queryApiKey = req.query?.apiKey;
-  if (typeof queryApiKey === 'string' && queryApiKey.trim() !== '') {
-    return queryApiKey.trim();
+  const cookies = parseCookieHeader(req.headers.cookie);
+  const cookieKey = cookies[AUTH_COOKIE_NAME];
+  if (typeof cookieKey === 'string' && cookieKey.trim() !== '') {
+    return cookieKey.trim();
   }
   return undefined;
 }

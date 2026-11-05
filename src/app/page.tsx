@@ -327,7 +327,7 @@ export default function ShoppingListApp() {
 
     let eventSource: EventSource | null = null;
     if (typeof EventSource !== 'undefined') {
-      eventSource = new EventSource(`/api/events?apiKey=${encodeURIComponent(apiKey)}`);
+      eventSource = new EventSource('/api/events', { withCredentials: true });
       eventSource.onmessage = (event) => {
         try {
           const payload = JSON.parse(event.data) as {
@@ -452,6 +452,7 @@ export default function ShoppingListApp() {
   };
 
   const handleLogout = async () => {
+    await fetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
     localStorage.removeItem(API_KEY_STORAGE_KEY);
     localStorage.removeItem('shopping_list_user_profile');
     await saveApiKeyToOfflineStore(null);
