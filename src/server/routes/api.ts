@@ -49,7 +49,6 @@ const joinSchema = z.object({
 
 const createInviteSchema = z.object({
   baseUrl: z.string().url().optional(),
-  maxUses: z.number().int().min(1).max(100).optional(),
 });
 
 const userStatusSchema = z.object({
@@ -127,7 +126,7 @@ apiRouter.post(
       const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'http';
       const host = req.headers['x-forwarded-host'] || req.get('host') || 'localhost:3000';
       const baseUrl = parsed.baseUrl ?? `${protocol}://${host}`;
-      const invite = await createInviteQr(getDb(), req.user!, baseUrl, parsed.maxUses ?? 10);
+      const invite = await createInviteQr(getDb(), req.user!, baseUrl);
       res.status(201).json({ invite });
     } catch (err) {
       next(err);

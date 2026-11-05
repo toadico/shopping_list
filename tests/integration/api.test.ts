@@ -64,24 +64,41 @@ describe('Integration Tests: Express API Routes, Security & Probes', () => {
       expect(res.body.error.code).toBe('UNAUTHORIZED');
     });
 
-    it('rejects non-admin username login attempts and wrong admin passwords', async () => {
+    it('rejects non-admin username login attempts, expires password after 1 correct use, and expires after 3 wrong attempts', async () => {
       const nonAdmin = await request(app)
         .post('/api/auth/admin/login')
         .send({ username: 'some_user', password: adminPassword });
       expect(nonAdmin.status).toBe(401);
 
-      const badPass = await request(app)
+      // Reusing adminPassword after the 1 successful login in beforeEach is rejected as expired
+      const secondUse = await request(app)
         .post('/api/auth/admin/login')
-        .send({ username: 'shopping_admin', password: 'wrong-password' });
-      expect(badPass.status).toBe(401);
+        .send({ username: 'shopping_admin', password: adminPassword });
+      expect(secondUse.status).toBe(401);
+      expect(secondUse.body.error.message).toMatch(/expired/i);
+
+      // Simulate container restart and verify 3 failed attempts expire the new password
+      const restartBoot = bootstrapAdminAccount(db);
+      for (let i = 0; i < 3; i++) {
+        const badPass = await request(app)
+          .post('/api/auth/admin/login')
+          .send({ username: 'shopping_admin', password: 'wrong-password' });
+        expect(badPass.status).toBe(401);
+      }
+
+      const afterThreeFails = await request(app)
+        .post('/api/auth/admin/login')
+        .send({ username: 'shopping_admin', password: restartBoot.password });
+      expect(afterThreeFails.status).toBe(401);
+      expect(afterThreeFails.body.error.message).toMatch(/expired/i);
     });
 
     it('completes full QR invite onboarding and allows existing user to invite another user', async () => {
-      // 1. Admin generates QR invite
+      // 1. Admin generates QR invite (expires in 30 minutes, 1 use)
       const inviteRes = await request(app)
         .post('/api/auth/invites')
         .set('Authorization', `Bearer ${adminApiKey}`)
-        .send({ baseUrl: 'http://localhost:3000', maxUses: 5 });
+        .send({ baseUrl: 'http://localhost:3000' });
 
       expect(inviteRes.status).toBe(201);
       const token = inviteRes.body.invite.token;
@@ -102,6 +119,12 @@ describe('Integration Tests: Express API Routes, Security & Probes', () => {
       expect(joinRes.body.user.role).toBe('user');
       expect(joinRes.body.user.canManageUsers).toBe(true);
       const sarahKey = joinRes.body.apiKey;
+
+      // Attempting to reuse the same single-use invite token fails with 403 Forbidden
+      const reuseInviteRes = await request(app)
+        .post('/api/auth/join')
+        .send({ token, name: 'Duplicate User' });
+      expect(reuseInviteRes.status).toBe(403);
       const setCookieHeader = joinRes.headers['set-cookie'];
       expect(setCookieHeader).toBeDefined();
       expect(String(setCookieHeader)).toContain('shopping_list_api_key=');

@@ -789,7 +789,6 @@ export default function ShoppingListApp() {
         },
         body: JSON.stringify({
           baseUrl: window.location.origin,
-          maxUses: 10,
         }),
       });
       const data = await res.json();
@@ -1622,8 +1621,9 @@ export default function ShoppingListApp() {
               </button>
             </div>
             <p style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', marginBottom: '1rem' }}>
-              Have the new user scan this QR code with their phone camera. They will be asked for
-              their Name and issued a non-expiring personal API key.
+              Have the new user scan this QR code with their phone camera. This invite is valid for{' '}
+              <strong>1 use only</strong> and <strong>expires in 30 minutes</strong> (at{' '}
+              {new Date(generatedInvite.expiresAt).toLocaleTimeString()}).
             </p>
             <div
               style={{

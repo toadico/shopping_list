@@ -15,10 +15,10 @@ let shuttingDown = false;
 export async function startServer(): Promise<http.Server> {
   // 1. Initialize SQLite database & bootstrap shopping_admin
   const db = getDb();
-  const { password } = bootstrapAdminAccount(db);
+  const { password, expiresAt } = bootstrapAdminAccount(db);
 
   // 2. Display shopping_admin password strictly on container console on every startup
-  printAdminPasswordBanner(password);
+  printAdminPasswordBanner(password, expiresAt);
 
   // 3. Prepare Next.js application
   const createNextServer = (

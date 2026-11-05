@@ -93,69 +93,138 @@ export function verifyPassword(password: string, storedHash: string): boolean {
   return crypto.timingSafeEqual(derived, keyBuf);
 }
 
+interface AdminConsolePasswordState {
+  passwordHash: string;
+  expiresAt: number;
+  failedAttempts: number;
+  expired: boolean;
+  expiredReason: string | null;
+  expiryTimer: ReturnType<typeof setTimeout> | null;
+}
+
+const ADMIN_PASSWORD_TTL_MS = 30 * 60 * 1000; // 30 minutes
+const MAX_ADMIN_PASSWORD_FAILED_ATTEMPTS = 3;
+
+let adminPasswordState: AdminConsolePasswordState | null = null;
+
+export function printAdminPasswordBanner(password: string, expiresAtIso?: string): void {
+  const border = '='.repeat(68);
+  const expiryDisplay =
+    expiresAtIso ??
+    (adminPasswordState ? new Date(adminPasswordState.expiresAt).toISOString() : '30 minutes from start');
+  process.stdout.write(
+    `\n${border}\n` +
+      `  SHARED SHOPPING LIST — CONTAINER CONSOLE ADMIN CREDENTIALS\n` +
+      `${border}\n` +
+      `  Initial Admin Username : shopping_admin\n` +
+      `  Initial Admin Password : ${password}\n` +
+      `  Password Policy        : 1 correct use | max 3 failed attempts | 30m TTL\n` +
+      `  Password Expires At    : ${expiryDisplay}\n` +
+      `${border}\n\n`
+  );
+}
+
+export function printAdminPasswordExpiredNotice(reason: string): void {
+  const border = '='.repeat(68);
+  process.stdout.write(
+    `\n${border}\n` +
+      `  SHARED SHOPPING LIST — shopping_admin CONSOLE PASSWORD EXPIRED\n` +
+      `${border}\n` +
+      `  Status     : EXPIRED (${reason})\n` +
+      `  Expired At : ${new Date().toISOString()}\n` +
+      `  Note       : The shopping_admin API key remains active.\n` +
+      `               Restart the container if you need a new console password.\n` +
+      `${border}\n\n`
+  );
+}
+
+export function expireAdminConsolePassword(reason: string): void {
+  if (!adminPasswordState || adminPasswordState.expired) {
+    return;
+  }
+  if (adminPasswordState.expiryTimer) {
+    clearTimeout(adminPasswordState.expiryTimer);
+    adminPasswordState.expiryTimer = null;
+  }
+  adminPasswordState.expired = true;
+  adminPasswordState.expiredReason = reason;
+  adminPasswordState.passwordHash = '';
+  printAdminPasswordExpiredNotice(reason);
+}
+
 /**
- * Ensures the initial user "shopping_admin" exists.
- * On first container start, sets a random password and persists it in SQLite.
- * Returns the admin password so the container startup can log it to stdout console only.
+ * Ensures the initial user "shopping_admin" exists in SQLite (with NO password stored in DB)
+ * and generates a fresh ephemeral console password in memory that expires after:
+ * - 1 correct use
+ * - 3 incorrect attempts
+ * - 30 minutes after container startup
  */
-export function bootstrapAdminAccount(db: DbInstance): {
+export function bootstrapAdminAccount(
+  db: DbInstance,
+  ttlMs = ADMIN_PASSWORD_TTL_MS
+): {
   username: string;
   password: string;
+  expiresAt: string;
   created: boolean;
 } {
   const now = new Date().toISOString();
 
-  const existingConfig = db
-    .prepare('SELECT value FROM system_config WHERE key = ?')
-    .get('admin_console_password') as { value: string } | undefined;
+  if (adminPasswordState?.expiryTimer) {
+    clearTimeout(adminPasswordState.expiryTimer);
+  }
+
+  // Generate fresh ephemeral password in memory only (never stored in SQLite)
+  const password = generateRandomAdminPassword();
+  const passwordHash = hashPassword(password);
+  const expiresAtMs = Date.now() + ttlMs;
+  const expiresAtIso = new Date(expiresAtMs).toISOString();
+
+  const expiryTimer = setTimeout(() => {
+    expireAdminConsolePassword('30-minute container startup timeout');
+  }, ttlMs);
+  expiryTimer.unref();
+
+  adminPasswordState = {
+    passwordHash,
+    expiresAt: expiresAtMs,
+    failedAttempts: 0,
+    expired: false,
+    expiredReason: null,
+    expiryTimer,
+  };
 
   const existingAdmin = db
     .prepare('SELECT * FROM users WHERE username = ?')
     .get('shopping_admin') as UserRecord | undefined;
 
-  if (existingAdmin && existingConfig) {
-    return {
-      username: 'shopping_admin',
-      password: existingConfig.value,
-      created: false,
-    };
-  }
-
-  const password = existingConfig?.value ?? generateRandomAdminPassword();
-  const passwordHash = hashPassword(password);
-  const apiKey = generateApiKey();
-  const apiKeyHash = hashApiKey(apiKey);
-  const apiKeyPrefix = apiKey.slice(0, 10);
-
   const tx = db.transaction(() => {
-    db.prepare(
-      `INSERT INTO system_config (key, value, updated_at)
-       VALUES (?, ?, ?)
-       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
-    ).run('admin_console_password', password, now);
+    // Ensure no admin password is stored in system_config or users table
+    db.prepare('DELETE FROM system_config WHERE key = ?').run('admin_console_password');
 
     if (!existingAdmin) {
+      const apiKey = generateApiKey();
+      const apiKeyHash = hashApiKey(apiKey);
+      const apiKeyPrefix = apiKey.slice(0, 10);
+
       db.prepare(
         `INSERT INTO users (
           id, name, username, password_hash, api_key_hash, api_key_prefix,
           role, can_manage_users, status, invited_by, created_at, last_seen_at
-        ) VALUES (?, ?, ?, ?, ?, ?, 'admin', 1, 'active', 'system', ?, ?)`
+        ) VALUES (?, ?, ?, NULL, ?, ?, 'admin', 1, 'active', 'system', ?, ?)`
       ).run(
         crypto.randomUUID(),
         'Shopping Administrator',
         'shopping_admin',
-        passwordHash,
         apiKeyHash,
         apiKeyPrefix,
         now,
         now
       );
     } else {
-      db.prepare('UPDATE users SET password_hash = ?, can_manage_users = 1, status = ? WHERE id = ?').run(
-        passwordHash,
-        'active',
-        existingAdmin.id
-      );
+      db.prepare(
+        'UPDATE users SET password_hash = NULL, can_manage_users = 1, status = ? WHERE id = ?'
+      ).run('active', existingAdmin.id);
     }
   });
 
@@ -164,20 +233,9 @@ export function bootstrapAdminAccount(db: DbInstance): {
   return {
     username: 'shopping_admin',
     password,
-    created: true,
+    expiresAt: expiresAtIso,
+    created: !existingAdmin,
   };
-}
-
-export function printAdminPasswordBanner(password: string): void {
-  const border = '='.repeat(68);
-  process.stdout.write(
-    `\n${border}\n` +
-      `  SHARED SHOPPING LIST — CONTAINER CONSOLE ADMIN CREDENTIALS\n` +
-      `${border}\n` +
-      `  Initial Admin Username : shopping_admin\n` +
-      `  Initial Admin Password : ${password}\n` +
-      `${border}\n\n`
-  );
 }
 
 export function loginAdmin(
@@ -193,13 +251,42 @@ export function loginAdmin(
     throw new UnauthorizedError('Only shopping_admin may log in with a username and password');
   }
 
+  if (!adminPasswordState) {
+    throw new UnauthorizedError('Admin console password is not active. Restart the container.');
+  }
+
+  if (!adminPasswordState.expired && Date.now() >= adminPasswordState.expiresAt) {
+    expireAdminConsolePassword('30-minute container startup timeout');
+  }
+
+  if (adminPasswordState.expired) {
+    throw new UnauthorizedError(
+      `The shopping_admin console password has expired (${adminPasswordState.expiredReason}). Restart the container to generate a new console password.`
+    );
+  }
+
   const admin = db
     .prepare('SELECT * FROM users WHERE username = ?')
     .get('shopping_admin') as UserRecord | undefined;
 
-  if (!admin || !admin.password_hash || !verifyPassword(password, admin.password_hash)) {
+  if (!admin) {
+    throw new UnauthorizedError('Admin account not found');
+  }
+
+  const isPasswordValid = verifyPassword(password, adminPasswordState.passwordHash);
+  if (!isPasswordValid) {
+    adminPasswordState.failedAttempts += 1;
+    if (adminPasswordState.failedAttempts >= MAX_ADMIN_PASSWORD_FAILED_ATTEMPTS) {
+      expireAdminConsolePassword('3 incorrect login attempts');
+      throw new UnauthorizedError(
+        'The shopping_admin console password has expired after 3 incorrect attempts. Restart the container to generate a new console password.'
+      );
+    }
     throw new UnauthorizedError('Invalid username or password');
   }
+
+  // Expire the console password immediately after 1 correct use
+  expireAdminConsolePassword('1 correct login use');
 
   const newApiKey = generateApiKey();
   const apiKeyHash = hashApiKey(newApiKey);
@@ -251,12 +338,12 @@ export function authenticateByApiKey(db: DbInstance, rawApiKey?: string): Public
 export async function createInviteQr(
   db: DbInstance,
   creator: PublicUser,
-  baseUrl: string,
-  maxUses = 10
+  baseUrl: string
 ): Promise<InviteInfo> {
   const token = crypto.randomBytes(24).toString('base64url');
   const now = new Date();
-  const expiresAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString(); // 7 days
+  const expiresAt = new Date(now.getTime() + 30 * 60 * 1000).toISOString(); // 30 minutes
+  const maxUses = 1; // Single-use invite
 
   // Only the shopping_admin account can pass user-management rights via QR code.
   // Users who scan from any other user cannot manage the users list, even if that

@@ -69,29 +69,88 @@ describe('Unit Tests: Error Hierarchy & Domain Services', () => {
     });
   });
 
-  describe('Admin Bootstrap & Console Banner', () => {
-    it('randomly generates shopping_admin password on first start and reuses stored password on subsequent starts', () => {
-      const firstBoot = bootstrapAdminAccount(db);
-      expect(firstBoot.username).toBe('shopping_admin');
-      expect(firstBoot.created).toBe(true);
-      expect(firstBoot.password.length).toBeGreaterThanOrEqual(16);
+  describe('Admin Bootstrap & Console Password Lifecycle', () => {
+    it('never stores the password in SQLite, expires after 1 correct use (while keeping API key active), and logs expiration to console', () => {
+      const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+      try {
+        const boot = bootstrapAdminAccount(db);
+        expect(boot.username).toBe('shopping_admin');
+        expect(boot.created).toBe(true);
+        expect(boot.password.length).toBeGreaterThanOrEqual(16);
 
-      const secondBoot = bootstrapAdminAccount(db);
-      expect(secondBoot.created).toBe(false);
-      expect(secondBoot.password).toBe(firstBoot.password);
+        // 1. Verify password is NOT stored anywhere in SQLite
+        const configRow = db
+          .prepare('SELECT * FROM system_config WHERE key = ?')
+          .get('admin_console_password');
+        expect(configRow).toBeUndefined();
 
-      const loginResult = loginAdmin(db, 'shopping_admin', firstBoot.password);
-      expect(loginResult.user.username).toBe('shopping_admin');
-      expect(loginResult.user.role).toBe('admin');
-      expect(loginResult.apiKey).toMatch(/^slk_/);
+        const adminRow = db
+          .prepare('SELECT password_hash FROM users WHERE username = ?')
+          .get('shopping_admin') as { password_hash: string | null };
+        expect(adminRow.password_hash).toBeNull();
+
+        // 2. First correct use succeeds and expires the console password immediately
+        const loginResult = loginAdmin(db, 'shopping_admin', boot.password);
+        expect(loginResult.user.username).toBe('shopping_admin');
+        expect(loginResult.user.role).toBe('admin');
+        expect(loginResult.apiKey).toMatch(/^slk_/);
+        expect(stdoutSpy).toHaveBeenCalledWith(
+          expect.stringContaining('EXPIRED (1 correct login use)')
+        );
+
+        // Second attempt with the same password fails because it expired after 1 correct use
+        expect(() => loginAdmin(db, 'shopping_admin', boot.password)).toThrow(
+          /expired/i
+        );
+
+        // However, the shopping_admin API key remains active and unaffected
+        const authenticatedAdmin = authenticateByApiKey(db, loginResult.apiKey);
+        expect(authenticatedAdmin.username).toBe('shopping_admin');
+      } finally {
+        stdoutSpy.mockRestore();
+      }
     });
 
-    it('prints the shopping_admin credentials to stdout console', () => {
+    it('expires the shopping_admin password after 3 incorrect login attempts and logs to console', () => {
       const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
-      printAdminPasswordBanner('test-secret-pass-123');
-      expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('shopping_admin'));
-      expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('test-secret-pass-123'));
-      stdoutSpy.mockRestore();
+      try {
+        const boot = bootstrapAdminAccount(db);
+
+        expect(() => loginAdmin(db, 'shopping_admin', 'wrong-1')).toThrow(UnauthorizedError);
+        expect(() => loginAdmin(db, 'shopping_admin', 'wrong-2')).toThrow(UnauthorizedError);
+        expect(() => loginAdmin(db, 'shopping_admin', 'wrong-3')).toThrow(
+          /expired after 3 incorrect attempts/i
+        );
+
+        expect(stdoutSpy).toHaveBeenCalledWith(
+          expect.stringContaining('EXPIRED (3 incorrect login attempts)')
+        );
+
+        // Even the valid password is now rejected until container restart
+        expect(() => loginAdmin(db, 'shopping_admin', boot.password)).toThrow(/expired/i);
+      } finally {
+        stdoutSpy.mockRestore();
+      }
+    });
+
+    it('expires the shopping_admin password after the startup timeout and logs to console', async () => {
+      const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+      try {
+        // Use a short 25ms TTL to verify startup timeout expiration
+        const boot = bootstrapAdminAccount(db, 25);
+        printAdminPasswordBanner(boot.password, boot.expiresAt);
+        expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('shopping_admin'));
+        expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining(boot.password));
+
+        await new Promise((resolve) => setTimeout(resolve, 50));
+
+        expect(stdoutSpy).toHaveBeenCalledWith(
+          expect.stringContaining('EXPIRED (30-minute container startup timeout)')
+        );
+        expect(() => loginAdmin(db, 'shopping_admin', boot.password)).toThrow(/expired/i);
+      } finally {
+        stdoutSpy.mockRestore();
+      }
     });
   });
 
@@ -100,8 +159,12 @@ describe('Unit Tests: Error Hierarchy & Domain Services', () => {
       const { password } = bootstrapAdminAccount(db);
       const { user: adminUser } = loginAdmin(db, 'shopping_admin', password);
 
-      // Admin creates a QR invite (grantsManageUsers = true)
-      const invite = await createInviteQr(db, adminUser, 'http://localhost:3000', 2);
+      // Admin creates a QR invite (grantsManageUsers = true, expires in 30m, 1 use)
+      const beforeCreate = Date.now();
+      const invite = await createInviteQr(db, adminUser, 'http://localhost:3000');
+      const expiresMs = new Date(invite.expiresAt).getTime() - beforeCreate;
+      expect(expiresMs).toBeGreaterThanOrEqual(29 * 60 * 1000);
+      expect(expiresMs).toBeLessThanOrEqual(31 * 60 * 1000);
       expect(invite.qrCodeDataUrl).toMatch(/^data:image\/png;base64,/);
       expect(invite.inviteUrl).toContain(`/?invite=${encodeURIComponent(invite.token)}`);
       expect(invite.grantsManageUsers).toBe(true);
@@ -118,14 +181,17 @@ describe('Unit Tests: Error Hierarchy & Domain Services', () => {
       expect(joined1.user.canManageUsers).toBe(true);
       expect(joined1.apiKey).toMatch(/^slk_/);
 
+      // Admin's invite is also single-use, so reusing it must fail with ForbiddenError
+      expect(() => redeemInviteToken(db, invite.token, 'Second Use')).toThrow(ForbiddenError);
+
       // Alice (even though she has canManageUsers = true) creates an invite QR code for Bob -> does NOT pass manage users right
-      const aliceInvite = await createInviteQr(db, joined1.user, 'http://localhost:3000', 1);
+      const aliceInvite = await createInviteQr(db, joined1.user, 'http://localhost:3000');
       expect(aliceInvite.grantsManageUsers).toBe(false);
       const joined2 = redeemInviteToken(db, aliceInvite.token, 'Bob Buyer');
       expect(joined2.user.invitedBy).toBe(joined1.user.id);
       expect(joined2.user.canManageUsers).toBe(false);
 
-      // AliceInvite had maxUses = 1, so a second redemption must fail with ForbiddenError
+      // Alice's invite is single-use, so a second redemption must fail with ForbiddenError
       expect(() => redeemInviteToken(db, aliceInvite.token, 'Charlie')).toThrow(ForbiddenError);
 
       // Admin sees all users
