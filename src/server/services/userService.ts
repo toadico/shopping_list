@@ -39,6 +39,10 @@ export function updateUserStatus(
     throw new ConflictError('Cannot disable or revoke the primary shopping_admin account');
   }
 
+  if (target.status === 'revoked' && status !== 'revoked') {
+    throw new ConflictError('A revoked user API key cannot be re-enabled');
+  }
+
   db.prepare('UPDATE users SET status = ? WHERE id = ?').run(status, userId);
 
   const updated = db.prepare('SELECT * FROM users WHERE id = ?').get(userId) as UserRecord;
@@ -47,4 +51,24 @@ export function updateUserStatus(
 
 export function revokeUserAccess(db: DbInstance, userId: string): PublicUser {
   return updateUserStatus(db, userId, 'revoked');
+}
+
+export function deleteUser(db: DbInstance, userId: string): void {
+  const target = db.prepare('SELECT * FROM users WHERE id = ?').get(userId) as
+    | UserRecord
+    | undefined;
+  if (!target) {
+    throw new NotFoundError('User');
+  }
+
+  if (target.username === 'shopping_admin' || target.role === 'admin') {
+    throw new ConflictError('Cannot delete the primary shopping_admin account');
+  }
+
+  if (target.status !== 'revoked') {
+    throw new ConflictError('Only users with a revoked API key can be deleted');
+  }
+
+  db.prepare('UPDATE invite_tokens SET revoked = 1 WHERE created_by = ?').run(userId);
+  db.prepare('DELETE FROM users WHERE id = ?').run(userId);
 }

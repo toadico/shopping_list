@@ -7,6 +7,7 @@ import {
   extractApiKey,
   requireAuth,
   requireAdmin,
+  requireShopper,
   setAuthCookie,
 } from '../middleware/auth.js';
 import {
@@ -16,6 +17,7 @@ import {
   verifyInviteToken,
 } from '../services/authService.js';
 import {
+  deleteUser,
   listUsers,
   revokeUserAccess,
   updateUserStatus,
@@ -198,9 +200,25 @@ apiRouter.post(
   }
 );
 
+apiRouter.delete(
+  '/users/:id',
+  requireAuth,
+  requireAdmin,
+  (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const userId = String(req.params.id);
+      deleteUser(getDb(), userId);
+      disconnectUserSseClients(userId);
+      res.status(204).send();
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
 // --- Real-Time Server-Sent Events (SSE) Stream ---
 
-apiRouter.get('/events', requireAuth, (req: Request, res: Response) => {
+apiRouter.get('/events', requireAuth, requireShopper, (req: Request, res: Response) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
@@ -227,7 +245,7 @@ apiRouter.get('/events', requireAuth, (req: Request, res: Response) => {
 
 // --- Store Routes ---
 
-apiRouter.get('/stores', requireAuth, (_req: Request, res: Response, next: NextFunction) => {
+apiRouter.get('/stores', requireAuth, requireShopper, (_req: Request, res: Response, next: NextFunction) => {
   try {
     const stores = listStores(getDb());
     res.status(200).json({ stores });
@@ -236,7 +254,7 @@ apiRouter.get('/stores', requireAuth, (_req: Request, res: Response, next: NextF
   }
 });
 
-apiRouter.post('/stores', requireAuth, (req: Request, res: Response, next: NextFunction) => {
+apiRouter.post('/stores', requireAuth, requireShopper, (req: Request, res: Response, next: NextFunction) => {
   try {
     const parsed = createStoreSchema.parse(req.body);
     const db = getDb();
@@ -256,7 +274,7 @@ apiRouter.post('/stores', requireAuth, (req: Request, res: Response, next: NextF
 
 // --- Shopping List Item Routes ---
 
-apiRouter.get('/items', requireAuth, (req: Request, res: Response, next: NextFunction) => {
+apiRouter.get('/items', requireAuth, requireShopper, (req: Request, res: Response, next: NextFunction) => {
   try {
     const storeName = typeof req.query.storeName === 'string' ? req.query.storeName : undefined;
     const checkedParam = req.query.checked;
@@ -270,7 +288,7 @@ apiRouter.get('/items', requireAuth, (req: Request, res: Response, next: NextFun
   }
 });
 
-apiRouter.post('/items', requireAuth, (req: Request, res: Response, next: NextFunction) => {
+apiRouter.post('/items', requireAuth, requireShopper, (req: Request, res: Response, next: NextFunction) => {
   try {
     const parsed = createItemSchema.parse(req.body);
     const db = getDb();
@@ -287,7 +305,7 @@ apiRouter.post('/items', requireAuth, (req: Request, res: Response, next: NextFu
   }
 });
 
-apiRouter.patch('/items/:id', requireAuth, (req: Request, res: Response, next: NextFunction) => {
+apiRouter.patch('/items/:id', requireAuth, requireShopper, (req: Request, res: Response, next: NextFunction) => {
   try {
     const parsed = updateItemSchema.parse(req.body);
     const db = getDb();
@@ -304,7 +322,7 @@ apiRouter.patch('/items/:id', requireAuth, (req: Request, res: Response, next: N
   }
 });
 
-apiRouter.delete('/items/:id', requireAuth, (req: Request, res: Response, next: NextFunction) => {
+apiRouter.delete('/items/:id', requireAuth, requireShopper, (req: Request, res: Response, next: NextFunction) => {
   try {
     const db = getDb();
     deleteItem(db, String(req.params.id));
@@ -320,7 +338,7 @@ apiRouter.delete('/items/:id', requireAuth, (req: Request, res: Response, next: 
   }
 });
 
-apiRouter.post('/items/sync', requireAuth, (req: Request, res: Response, next: NextFunction) => {
+apiRouter.post('/items/sync', requireAuth, requireShopper, (req: Request, res: Response, next: NextFunction) => {
   try {
     const parsed = syncMutationsSchema.parse(req.body);
     const db = getDb();

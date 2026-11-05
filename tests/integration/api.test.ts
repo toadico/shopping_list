@@ -195,28 +195,88 @@ describe('Integration Tests: Express API Routes, Security & Probes', () => {
         .set('Authorization', `Bearer ${sarahKey}`);
       expect(blockedRes.status).toBe(403);
 
+      // Cannot delete a disabled (non-revoked) user
+      const prematureDeleteRes = await request(app)
+        .delete(`/api/users/${joinRes.body.user.id}`)
+        .set('Authorization', `Bearer ${adminApiKey}`);
+      expect(prematureDeleteRes.status).toBe(409);
+
       // 8. Admin revokes Sarah permanently
       const revokeRes = await request(app)
         .post(`/api/users/${joinRes.body.user.id}/revoke`)
         .set('Authorization', `Bearer ${adminApiKey}`);
       expect(revokeRes.status).toBe(200);
       expect(revokeRes.body.user.status).toBe('revoked');
+
+      // 9. Attempting to re-enable a revoked user's API key is rejected with 409 Conflict
+      const reEnableRes = await request(app)
+        .patch(`/api/users/${joinRes.body.user.id}/status`)
+        .set('Authorization', `Bearer ${adminApiKey}`)
+        .send({ status: 'active' });
+      expect(reEnableRes.status).toBe(409);
+      expect(reEnableRes.body.error.message).toMatch(/cannot be re-enabled/i);
+
+      // 10. Once revoked, the user can be deleted
+      const deleteUserRes = await request(app)
+        .delete(`/api/users/${joinRes.body.user.id}`)
+        .set('Authorization', `Bearer ${adminApiKey}`);
+      expect(deleteUserRes.status).toBe(204);
+
+      const usersAfterDeleteRes = await request(app)
+        .get('/api/users')
+        .set('Authorization', `Bearer ${adminApiKey}`);
+      expect(usersAfterDeleteRes.status).toBe(200);
+      expect(
+        usersAfterDeleteRes.body.users.some(
+          (u: { id: string }) => u.id === joinRes.body.user.id
+        )
+      ).toBe(false);
     });
   });
 
   describe('Stores & Shopping Items CRUD, Picture Attachment, Sanitization & Sync', () => {
-    it('supports selectable stores, typing new stores, attaching pictures, sanitizing XSS inputs, and offline sync', async () => {
-      // List initial stores
-      const storesRes = await request(app)
+    it('blocks shopping_admin from accessing items/stores while supporting selectable stores, pictures, XSS sanitization, and offline sync for onboarded users', async () => {
+      // shopping_admin is blocked from accessing /api/items and /api/stores
+      const adminGetItemsRes = await request(app)
+        .get('/api/items')
+        .set('Authorization', `Bearer ${adminApiKey}`);
+      expect(adminGetItemsRes.status).toBe(403);
+
+      const adminCreateItemRes = await request(app)
+        .post('/api/items')
+        .set('Authorization', `Bearer ${adminApiKey}`)
+        .send({ name: 'Milk' });
+      expect(adminCreateItemRes.status).toBe(403);
+
+      const adminGetStoresRes = await request(app)
         .get('/api/stores')
         .set('Authorization', `Bearer ${adminApiKey}`);
+      expect(adminGetStoresRes.status).toBe(403);
+
+      // Onboard a regular shopper via QR invite
+      const inviteRes = await request(app)
+        .post('/api/auth/invites')
+        .set('Authorization', `Bearer ${adminApiKey}`)
+        .send({});
+      expect(inviteRes.status).toBe(201);
+
+      const joinRes = await request(app)
+        .post('/api/auth/join')
+        .send({ token: inviteRes.body.invite.token, name: 'Elena Shopper' });
+      expect(joinRes.status).toBe(201);
+      const shopperApiKey = joinRes.body.apiKey;
+
+      // List initial stores as shopper
+      const storesRes = await request(app)
+        .get('/api/stores')
+        .set('Authorization', `Bearer ${shopperApiKey}`);
       expect(storesRes.status).toBe(200);
       expect(storesRes.body.stores.length).toBeGreaterThanOrEqual(4);
 
       // Add a new store explicitly
       const createStoreRes = await request(app)
         .post('/api/stores')
-        .set('Authorization', `Bearer ${adminApiKey}`)
+        .set('Authorization', `Bearer ${shopperApiKey}`)
         .send({ name: 'Costco Wholesale' });
       expect(createStoreRes.status).toBe(201);
       expect(createStoreRes.body.store.name).toBe('Costco Wholesale');
@@ -227,7 +287,7 @@ describe('Integration Tests: Express API Routes, Security & Probes', () => {
       // Create shopping item with a brand-new typed store ("Whole Foods") + picture + script tag that gets sanitized
       const createItemRes = await request(app)
         .post('/api/items')
-        .set('Authorization', `Bearer ${adminApiKey}`)
+        .set('Authorization', `Bearer ${shopperApiKey}`)
         .send({
           name: 'Avocados <script>alert(1)</script>',
           quantity: '6',
@@ -244,7 +304,7 @@ describe('Integration Tests: Express API Routes, Security & Probes', () => {
       // Verify "Whole Foods" was automatically added to the selectable stores list
       const storesAfterRes = await request(app)
         .get('/api/stores')
-        .set('Authorization', `Bearer ${adminApiKey}`);
+        .set('Authorization', `Bearer ${shopperApiKey}`);
       expect(
         storesAfterRes.body.stores.some((s: { name: string }) => s.name === 'Whole Foods')
       ).toBe(true);
@@ -252,7 +312,7 @@ describe('Integration Tests: Express API Routes, Security & Probes', () => {
       // Reject invalid imageData format with 400 ValidationError
       const badImageRes = await request(app)
         .post('/api/items')
-        .set('Authorization', `Bearer ${adminApiKey}`)
+        .set('Authorization', `Bearer ${shopperApiKey}`)
         .send({
           name: 'Apples',
           imageData: 'javascript:alert(1)',
@@ -264,7 +324,7 @@ describe('Integration Tests: Express API Routes, Security & Probes', () => {
       const itemId = createItemRes.body.item.id;
       const patchRes = await request(app)
         .patch(`/api/items/${itemId}`)
-        .set('Authorization', `Bearer ${adminApiKey}`)
+        .set('Authorization', `Bearer ${shopperApiKey}`)
         .send({ checked: true, quantity: '8' });
       expect(patchRes.status).toBe(200);
       expect(patchRes.body.item.checked).toBe(true);
@@ -273,14 +333,14 @@ describe('Integration Tests: Express API Routes, Security & Probes', () => {
       // Filter items by storeName
       const filteredRes = await request(app)
         .get('/api/items?storeName=Whole%20Foods')
-        .set('Authorization', `Bearer ${adminApiKey}`);
+        .set('Authorization', `Bearer ${shopperApiKey}`);
       expect(filteredRes.status).toBe(200);
       expect(filteredRes.body.items).toHaveLength(1);
 
       // Batch sync offline mutations
       const syncRes = await request(app)
         .post('/api/items/sync')
-        .set('Authorization', `Bearer ${adminApiKey}`)
+        .set('Authorization', `Bearer ${shopperApiKey}`)
         .send({
           mutations: [
             {
@@ -303,13 +363,13 @@ describe('Integration Tests: Express API Routes, Security & Probes', () => {
       // Delete item
       const deleteRes = await request(app)
         .delete(`/api/items/${itemId}`)
-        .set('Authorization', `Bearer ${adminApiKey}`);
+        .set('Authorization', `Bearer ${shopperApiKey}`);
       expect(deleteRes.status).toBe(204);
 
       // Deleting non-existent item returns 404
       const deleteMissingRes = await request(app)
         .delete(`/api/items/${itemId}`)
-        .set('Authorization', `Bearer ${adminApiKey}`);
+        .set('Authorization', `Bearer ${shopperApiKey}`);
       expect(deleteMissingRes.status).toBe(404);
     });
 

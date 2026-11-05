@@ -1,8 +1,16 @@
 import crypto from 'node:crypto';
 import type { DbInstance } from '../db/database.js';
-import { NotFoundError, ValidationError } from '../errors/AppError.js';
+import { ForbiddenError, NotFoundError, ValidationError } from '../errors/AppError.js';
 import { findOrCreateStore, getStoreById } from './storeService.js';
 import type { PublicUser } from './authService.js';
+
+function assertNotShoppingAdmin(user: PublicUser): void {
+  if (user.username === 'shopping_admin' || user.role === 'admin') {
+    throw new ForbiddenError(
+      'The shopping_admin account does not have access to create or modify shopping list items'
+    );
+  }
+}
 
 export interface ShoppingItemRecord {
   id: string;
@@ -160,6 +168,8 @@ export function createItem(
   input: CreateItemInput,
   user: PublicUser
 ): ShoppingItemDTO {
+  assertNotShoppingAdmin(user);
+
   const name = (input.name ?? '').trim();
   if (name.length < 1 || name.length > 150) {
     throw new ValidationError('Item name must be between 1 and 150 characters', [
@@ -226,6 +236,8 @@ export function updateItem(
   input: UpdateItemInput,
   user: PublicUser
 ): ShoppingItemDTO {
+  assertNotShoppingAdmin(user);
+
   const existing = db
     .prepare('SELECT * FROM shopping_items WHERE id = ?')
     .get(itemId) as ShoppingItemRecord | undefined;
@@ -293,6 +305,8 @@ export function syncOfflineMutations(
   mutations: OfflineMutation[],
   user: PublicUser
 ): { applied: number; items: ShoppingItemDTO[] } {
+  assertNotShoppingAdmin(user);
+
   let applied = 0;
 
   const tx = db.transaction(() => {

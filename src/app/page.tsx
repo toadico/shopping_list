@@ -241,7 +241,11 @@ export default function ShoppingListApp() {
     const handleOnline = () => {
       setIsOnline(true);
       const savedKey = localStorage.getItem(API_KEY_STORAGE_KEY);
-      if (savedKey) {
+      const cachedProfile = localStorage.getItem('shopping_list_user_profile');
+      const parsedProfile = cachedProfile ? (JSON.parse(cachedProfile) as UserProfile) : null;
+      const isAdminAccount =
+        parsedProfile?.role === 'admin' || parsedProfile?.username === 'shopping_admin';
+      if (savedKey && !isAdminAccount) {
         void loadListAndStores(savedKey);
       }
     };
@@ -289,7 +293,12 @@ export default function ShoppingListApp() {
           if (res.ok) {
             const data = await res.json();
             setCurrentUser(data.user);
-            await loadListAndStores(storedKey);
+            if (data.user?.role === 'admin' || data.user?.username === 'shopping_admin') {
+              setAdminTabOpen(true);
+              await fetchAllUsersForAdmin(storedKey);
+            } else {
+              await loadListAndStores(storedKey);
+            }
           } else if (res.status === 401 || res.status === 403) {
             const errData = await res.json().catch(() => ({}));
             setErrorMsg(errData?.error?.message || 'Session expired or revoked');
@@ -303,8 +312,11 @@ export default function ShoppingListApp() {
           // Offline mode with existing API key: allow viewing cached items
           const cachedProfile = localStorage.getItem('shopping_list_user_profile');
           if (cachedProfile) {
-            setCurrentUser(JSON.parse(cachedProfile));
-            await loadListAndStores(storedKey);
+            const parsedUser = JSON.parse(cachedProfile) as UserProfile;
+            setCurrentUser(parsedUser);
+            if (parsedUser.role !== 'admin' && parsedUser.username !== 'shopping_admin') {
+              await loadListAndStores(storedKey);
+            }
           }
         })
         .finally(() => {
@@ -317,11 +329,17 @@ export default function ShoppingListApp() {
       window.removeEventListener('offline', handleOffline);
       navigator.serviceWorker?.removeEventListener('message', handleSwMessage);
     };
-  }, [loadListAndStores]);
+  }, [fetchAllUsersForAdmin, loadListAndStores]);
 
   // Real-time multi-device sync via Server-Sent Events (SSE) + visibility/poll fallback
   useEffect(() => {
-    if (!apiKey || !currentUser || !isOnline) {
+    if (
+      !apiKey ||
+      !currentUser ||
+      !isOnline ||
+      currentUser.role === 'admin' ||
+      currentUser.username === 'shopping_admin'
+    ) {
       return;
     }
 
@@ -375,7 +393,12 @@ export default function ShoppingListApp() {
     await saveApiKeyToOfflineStore(key);
     setApiKey(key);
     setCurrentUser(user);
-    await loadListAndStores(key);
+    if (user.role === 'admin' || user.username === 'shopping_admin') {
+      setAdminTabOpen(true);
+      await fetchAllUsersForAdmin(key);
+    } else {
+      await loadListAndStores(key);
+    }
   };
 
   const handleAdminLogin = async (e: React.FormEvent) => {
@@ -813,6 +836,7 @@ export default function ShoppingListApp() {
     if (!apiKey) {
       return;
     }
+    setErrorMsg(null);
     try {
       const res = await fetch(`/api/users/${encodeURIComponent(targetUserId)}/status`, {
         method: 'PATCH',
@@ -831,6 +855,31 @@ export default function ShoppingListApp() {
       }
     } catch {
       setErrorMsg('Failed to update user status.');
+    }
+  };
+
+  // Admin: delete a user whose API key has been revoked
+  const handleDeleteUser = async (targetUserId: string, targetUserName: string) => {
+    if (!apiKey) {
+      return;
+    }
+    setErrorMsg(null);
+    try {
+      const res = await fetch(`/api/users/${encodeURIComponent(targetUserId)}`, {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+        },
+      });
+      if (res.ok) {
+        setAllUsers((prev) => prev.filter((u) => u.id !== targetUserId));
+        setSuccessMsg(`Deleted revoked user "${targetUserName}".`);
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setErrorMsg(data?.error?.message || 'Failed to delete user');
+      }
+    } catch {
+      setErrorMsg('Failed to delete user.');
     }
   };
 
@@ -1027,315 +1076,320 @@ export default function ShoppingListApp() {
         </div>
       )}
 
-      {/* Add Item Section */}
-      <section className="card">
-        <div className="card-title">
-          <span>➕ Add Item to Shopping List</span>
-        </div>
-
-        <form onSubmit={handleAddItem}>
-          <div className="form-grid">
-            <div className="form-group">
-              <label className="form-label" htmlFor="item-name">
-                Item Name *
-              </label>
-              <input
-                id="item-name"
-                className="input"
-                type="text"
-                placeholder="e.g., Organic Whole Milk"
-                value={itemName}
-                onChange={(e) => setItemName(e.target.value)}
-                required
-              />
-            </div>
-
-            <div className="form-group">
-              <label className="form-label" htmlFor="item-quantity">
-                Quantity
-              </label>
-              <input
-                id="item-quantity"
-                className="input"
-                type="text"
-                placeholder="e.g., 2 cartons"
-                value={itemQuantity}
-                onChange={(e) => setItemQuantity(e.target.value)}
-              />
-            </div>
-          </div>
-
-          {/* Button Store Selection + Add Store Button Below */}
-          <div className="form-group">
-            <label className="form-label">
-              Store (Selected: <strong>{selectedStoreName}</strong>)
-            </label>
-
-            <div className="store-chips">
-              {stores.map((store) => (
+      {/* Shopping List & Add Item Sections (Not shown to shopping_admin) */}
+      {currentUser.role !== 'admin' && currentUser.username !== 'shopping_admin' && (
+        <>
+          {/* Shopping List Section */}
+          <section className="card">
+            <div className="card-title">
+              <span>📋 Shopping List ({filteredItems.length})</span>
+              {pendingSyncCount > 0 && isOnline && apiKey && (
                 <button
-                  key={store.id}
                   type="button"
-                  className={`store-chip ${
-                    selectedStoreName.toLowerCase() === store.name.toLowerCase()
-                      ? 'active'
-                      : ''
-                  }`}
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    setSelectedStoreName(store.name);
-                  }}
+                  className="btn btn-sm btn-primary"
+                  onClick={() => syncOfflineQueue(apiKey)}
                 >
-                  🏬 {store.name}
+                  🔄 Sync Now ({pendingSyncCount})
                 </button>
-              ))}
+              )}
             </div>
 
-            <div style={{ marginTop: '0.65rem' }}>
+            {/* Store Filter Bar */}
+            <div className="store-chips" style={{ marginBottom: '1rem' }}>
               <button
                 type="button"
-                className="btn btn-secondary btn-sm"
+                className={`store-chip ${filterStore === 'ALL' ? 'active' : ''}`}
                 onClick={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
-                  setCustomStoreInput('');
-                  setAddStoreModalOpen(true);
+                  setFilterStore('ALL');
                 }}
               >
-                ➕ Add Store
+                All Stores ({items.length})
               </button>
+              {stores.map((s) => {
+                const count = items.filter(
+                  (i) => i.storeName.toLowerCase() === s.name.toLowerCase()
+                ).length;
+                return (
+                  <button
+                    key={s.id}
+                    type="button"
+                    className={`store-chip ${
+                      filterStore.toLowerCase() === s.name.toLowerCase() ? 'active' : ''
+                    }`}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setFilterStore(s.name);
+                    }}
+                  >
+                    {s.name} ({count})
+                  </button>
+                );
+              })}
             </div>
-          </div>
 
-          {/* Notes & Picture Attachment */}
-          <div className="form-grid" style={{ alignItems: 'end' }}>
-            <div className="form-group">
-              <label className="form-label" htmlFor="item-notes">
-                Notes (Optional)
-              </label>
-              <input
-                id="item-notes"
-                className="input"
-                type="text"
-                placeholder="Brand preference, aisle, size..."
-                value={itemNotes}
-                onChange={(e) => setItemNotes(e.target.value)}
-              />
-            </div>
+            {filteredItems.length === 0 ? (
+              <p style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: '2rem 0' }}>
+                No shopping list items yet. Add your first item below!
+              </p>
+            ) : (
+              <div className="item-list">
+                {filteredItems.map((item) => (
+                  <div
+                    key={item.id}
+                    className={`item-row ${item.checked ? 'checked' : ''}`}
+                  >
+                    <div className="item-main">
+                      <input
+                        type="checkbox"
+                        className="item-checkbox"
+                        checked={item.checked}
+                        onChange={() => handleToggleItemChecked(item)}
+                        aria-label={`Mark ${item.name} as ${item.checked ? 'unpurchased' : 'purchased'}`}
+                      />
 
-            <div className="form-group">
-              <label className="form-label">Attach Picture (Camera or Photo)</label>
-              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  onClick={openLiveCamera}
-                >
-                  📷 Take Picture
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  onClick={() => fileInputRef.current?.click()}
-                >
-                  🖼️ Upload / Camera File
-                </button>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/*"
-                  capture="environment"
-                  style={{ display: 'none' }}
-                  onChange={handleFileInputChange}
-                />
-              </div>
-            </div>
-          </div>
+                      {item.imageData && (
+                        <img
+                          src={item.imageData}
+                          alt={item.name}
+                          className="item-thumb"
+                          onClick={() => setPreviewImage(item.imageData)}
+                          title="Click to enlarge attached picture"
+                        />
+                      )}
 
-          {attachedImage && (
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.75rem',
-                marginBottom: '1rem',
-                padding: '0.5rem',
-                background: 'var(--bg-primary)',
-                borderRadius: 8,
-              }}
-            >
-              <img
-                src={attachedImage}
-                alt="Attached preview"
-                className="item-thumb"
-              />
-              <div style={{ flex: 1, fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                Picture attached and ready to save with this item.
-              </div>
-              <button
-                type="button"
-                className="btn btn-sm btn-danger"
-                onClick={() => setAttachedImage(null)}
-              >
-                Remove Picture
-              </button>
-            </div>
-          )}
+                      <div>
+                        <div
+                          style={{
+                            fontWeight: 600,
+                            fontSize: '1rem',
+                            textDecoration: item.checked ? 'line-through' : 'none',
+                          }}
+                        >
+                          {item.name}{' '}
+                          <span
+                            style={{
+                              fontWeight: 400,
+                              fontSize: '0.85rem',
+                              color: 'var(--text-secondary)',
+                            }}
+                          >
+                            × {item.quantity}
+                          </span>
+                        </div>
 
-          <button
-            type="submit"
-            className="btn btn-primary"
-            disabled={submittingItem}
-            style={{ width: '100%', marginTop: '0.25rem' }}
-          >
-            {submittingItem ? 'Adding Item...' : 'Add Item to Shopping List'}
-          </button>
-        </form>
-      </section>
+                        <div
+                          style={{
+                            display: 'flex',
+                            gap: '0.5rem',
+                            alignItems: 'center',
+                            flexWrap: 'wrap',
+                            marginTop: '0.25rem',
+                          }}
+                        >
+                          <span className="badge badge-store">🏬 {item.storeName}</span>
+                          <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                            Added by {item.createdByName}
+                          </span>
+                        </div>
 
-      {/* Shopping List Section */}
-      <section className="card">
-        <div className="card-title">
-          <span>📋 Shopping List ({filteredItems.length})</span>
-          {pendingSyncCount > 0 && isOnline && apiKey && (
-            <button
-              type="button"
-              className="btn btn-sm btn-primary"
-              onClick={() => syncOfflineQueue(apiKey)}
-            >
-              🔄 Sync Now ({pendingSyncCount})
-            </button>
-          )}
-        </div>
-
-        {/* Store Filter Bar */}
-        <div className="store-chips" style={{ marginBottom: '1rem' }}>
-          <button
-            type="button"
-            className={`store-chip ${filterStore === 'ALL' ? 'active' : ''}`}
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              setFilterStore('ALL');
-            }}
-          >
-            All Stores ({items.length})
-          </button>
-          {stores.map((s) => {
-            const count = items.filter(
-              (i) => i.storeName.toLowerCase() === s.name.toLowerCase()
-            ).length;
-            return (
-              <button
-                key={s.id}
-                type="button"
-                className={`store-chip ${
-                  filterStore.toLowerCase() === s.name.toLowerCase() ? 'active' : ''
-                }`}
-                onClick={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  setFilterStore(s.name);
-                }}
-              >
-                {s.name} ({count})
-              </button>
-            );
-          })}
-        </div>
-
-        {filteredItems.length === 0 ? (
-          <p style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: '2rem 0' }}>
-            No shopping list items yet. Add your first item above!
-          </p>
-        ) : (
-          <div className="item-list">
-            {filteredItems.map((item) => (
-              <div
-                key={item.id}
-                className={`item-row ${item.checked ? 'checked' : ''}`}
-              >
-                <div className="item-main">
-                  <input
-                    type="checkbox"
-                    className="item-checkbox"
-                    checked={item.checked}
-                    onChange={() => handleToggleItemChecked(item)}
-                    aria-label={`Mark ${item.name} as ${item.checked ? 'unpurchased' : 'purchased'}`}
-                  />
-
-                  {item.imageData && (
-                    <img
-                      src={item.imageData}
-                      alt={item.name}
-                      className="item-thumb"
-                      onClick={() => setPreviewImage(item.imageData)}
-                      title="Click to enlarge attached picture"
-                    />
-                  )}
-
-                  <div>
-                    <div
-                      style={{
-                        fontWeight: 600,
-                        fontSize: '1rem',
-                        textDecoration: item.checked ? 'line-through' : 'none',
-                      }}
-                    >
-                      {item.name}{' '}
-                      <span
-                        style={{
-                          fontWeight: 400,
-                          fontSize: '0.85rem',
-                          color: 'var(--text-secondary)',
-                        }}
-                      >
-                        × {item.quantity}
-                      </span>
-                    </div>
-
-                    <div
-                      style={{
-                        display: 'flex',
-                        gap: '0.5rem',
-                        alignItems: 'center',
-                        flexWrap: 'wrap',
-                        marginTop: '0.25rem',
-                      }}
-                    >
-                      <span className="badge badge-store">🏬 {item.storeName}</span>
-                      <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
-                        Added by {item.createdByName}
-                      </span>
-                    </div>
-
-                    {item.notes && (
-                      <div
-                        style={{
-                          fontSize: '0.85rem',
-                          color: 'var(--text-secondary)',
-                          marginTop: '0.25rem',
-                        }}
-                      >
-                        📝 {item.notes}
+                        {item.notes && (
+                          <div
+                            style={{
+                              fontSize: '0.85rem',
+                              color: 'var(--text-secondary)',
+                              marginTop: '0.25rem',
+                            }}
+                          >
+                            📝 {item.notes}
+                          </div>
+                        )}
                       </div>
-                    )}
+                    </div>
+
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-danger"
+                      onClick={() => handleDeleteItem(item.id)}
+                    >
+                      Delete
+                    </button>
                   </div>
+                ))}
+              </div>
+            )}
+          </section>
+
+          {/* Add Item Section */}
+          <section className="card">
+            <div className="card-title">
+              <span>➕ Add Item to Shopping List</span>
+            </div>
+
+            <form onSubmit={handleAddItem}>
+              <div className="form-grid">
+                <div className="form-group">
+                  <label className="form-label" htmlFor="item-name">
+                    Item Name *
+                  </label>
+                  <input
+                    id="item-name"
+                    className="input"
+                    type="text"
+                    placeholder="e.g., Organic Whole Milk"
+                    value={itemName}
+                    onChange={(e) => setItemName(e.target.value)}
+                    required
+                  />
                 </div>
 
-                <button
-                  type="button"
-                  className="btn btn-sm btn-danger"
-                  onClick={() => handleDeleteItem(item.id)}
-                >
-                  Delete
-                </button>
+                <div className="form-group">
+                  <label className="form-label" htmlFor="item-quantity">
+                    Quantity
+                  </label>
+                  <input
+                    id="item-quantity"
+                    className="input"
+                    type="text"
+                    placeholder="e.g., 2 cartons"
+                    value={itemQuantity}
+                    onChange={(e) => setItemQuantity(e.target.value)}
+                  />
+                </div>
               </div>
-            ))}
-          </div>
-        )}
-      </section>
+
+              {/* Button Store Selection + Add Store Button Below */}
+              <div className="form-group">
+                <label className="form-label">
+                  Store (Selected: <strong>{selectedStoreName}</strong>)
+                </label>
+
+                <div className="store-chips">
+                  {stores.map((store) => (
+                    <button
+                      key={store.id}
+                      type="button"
+                      className={`store-chip ${
+                        selectedStoreName.toLowerCase() === store.name.toLowerCase()
+                          ? 'active'
+                          : ''
+                      }`}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setSelectedStoreName(store.name);
+                      }}
+                    >
+                      🏬 {store.name}
+                    </button>
+                  ))}
+                </div>
+
+                <div style={{ marginTop: '0.65rem' }}>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setCustomStoreInput('');
+                      setAddStoreModalOpen(true);
+                    }}
+                  >
+                    ➕ Add Store
+                  </button>
+                </div>
+              </div>
+
+              {/* Notes & Picture Attachment */}
+              <div className="form-grid" style={{ alignItems: 'end' }}>
+                <div className="form-group">
+                  <label className="form-label" htmlFor="item-notes">
+                    Notes (Optional)
+                  </label>
+                  <input
+                    id="item-notes"
+                    className="input"
+                    type="text"
+                    placeholder="Brand preference, aisle, size..."
+                    value={itemNotes}
+                    onChange={(e) => setItemNotes(e.target.value)}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">Attach Picture (Camera or Photo)</label>
+                  <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={openLiveCamera}
+                    >
+                      📷 Take Picture
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={() => fileInputRef.current?.click()}
+                    >
+                      🖼️ Upload / Camera File
+                    </button>
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="image/*"
+                      capture="environment"
+                      style={{ display: 'none' }}
+                      onChange={handleFileInputChange}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {attachedImage && (
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.75rem',
+                    marginBottom: '1rem',
+                    padding: '0.5rem',
+                    background: 'var(--bg-primary)',
+                    borderRadius: 8,
+                  }}
+                >
+                  <img
+                    src={attachedImage}
+                    alt="Attached preview"
+                    className="item-thumb"
+                  />
+                  <div style={{ flex: 1, fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                    Picture attached and ready to save with this item.
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-danger"
+                    onClick={() => setAttachedImage(null)}
+                  >
+                    Remove Picture
+                  </button>
+                </div>
+              )}
+
+              <button
+                type="submit"
+                className="btn btn-primary"
+                disabled={submittingItem}
+                style={{ width: '100%', marginTop: '0.25rem' }}
+              >
+                {submittingItem ? 'Adding Item...' : 'Add Item to Shopping List'}
+              </button>
+            </form>
+          </section>
+        </>
+      )}
 
       {/* Shared Shopping List Management Bar (Bottom of Page) */}
       <footer className="header-bar">
@@ -1453,24 +1507,6 @@ export default function ShoppingListApp() {
                       <td>
                         {u.role !== 'admin' ? (
                           <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
-                            {u.status !== 'active' && (
-                              <button
-                                type="button"
-                                className="btn btn-sm btn-primary"
-                                onClick={() => handleUpdateUserStatus(u.id, 'active')}
-                              >
-                                Enable
-                              </button>
-                            )}
-                            {u.status === 'active' && (
-                              <button
-                                type="button"
-                                className="btn btn-sm btn-secondary"
-                                onClick={() => handleUpdateUserStatus(u.id, 'disabled')}
-                              >
-                                Disable
-                              </button>
-                            )}
                             {u.status !== 'revoked' && (
                               <button
                                 type="button"
@@ -1478,6 +1514,15 @@ export default function ShoppingListApp() {
                                 onClick={() => handleUpdateUserStatus(u.id, 'revoked')}
                               >
                                 Revoke Access
+                              </button>
+                            )}
+                            {u.status === 'revoked' && (
+                              <button
+                                type="button"
+                                className="btn btn-sm btn-danger"
+                                onClick={() => handleDeleteUser(u.id, u.name)}
+                              >
+                                Delete
                               </button>
                             )}
                           </div>

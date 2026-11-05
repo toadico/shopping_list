@@ -18,6 +18,7 @@ import {
   verifyInviteToken,
 } from '../../src/server/services/authService.js';
 import {
+  deleteUser,
   listUsers,
   revokeUserAccess,
   updateUserStatus,
@@ -207,19 +208,40 @@ describe('Unit Tests: Error Hierarchy & Domain Services', () => {
       updateUserStatus(db, joined1.user.id, 'active');
       expect(authenticateByApiKey(db, joined1.apiKey).id).toBe(joined1.user.id);
 
+      // Cannot delete an active or disabled user before their API key is revoked
+      expect(() => deleteUser(db, joined1.user.id)).toThrow(ConflictError);
+
       // Admin revokes Alice's API key access
       revokeUserAccess(db, joined1.user.id);
       expect(() => authenticateByApiKey(db, joined1.apiKey)).toThrow(ForbiddenError);
 
-      // Admin cannot disable or revoke shopping_admin itself
+      // Once revoked, Alice's API key cannot be re-enabled or set back to disabled
+      expect(() => updateUserStatus(db, joined1.user.id, 'active')).toThrow(ConflictError);
+      expect(() => updateUserStatus(db, joined1.user.id, 'disabled')).toThrow(ConflictError);
+
+      // Once revoked, Alice can be deleted
+      deleteUser(db, joined1.user.id);
+      expect(listUsers(db).some((u) => u.id === joined1.user.id)).toBe(false);
+
+      // Admin cannot disable, revoke, or delete shopping_admin itself
       expect(() => updateUserStatus(db, adminUser.id, 'revoked')).toThrow(ConflictError);
+      expect(() => deleteUser(db, adminUser.id)).toThrow(ConflictError);
     });
   });
 
   describe('Stores & Shopping Items with Inline Store Creation and Pictures', () => {
-    it('creates items, automatically adds typed store names to selectable stores, attaches pictures, and syncs offline mutations', () => {
+    it('prevents shopping_admin from creating items while allowing onboarded users to create items, add stores, attach pictures, and sync offline mutations', async () => {
       const { password } = bootstrapAdminAccount(db);
       const { user: adminUser } = loginAdmin(db, 'shopping_admin', password);
+
+      // shopping_admin cannot create items
+      expect(() =>
+        createItem(db, { name: 'Forbidden Admin Item' }, adminUser)
+      ).toThrow(ForbiddenError);
+
+      // Onboard a regular user via QR invite to test shopping list operations
+      const invite = await createInviteQr(db, adminUser, 'http://localhost:3000');
+      const { user: shopperUser } = redeemInviteToken(db, invite.token, 'Maya Shopper');
 
       const initialStores = listStores(db);
       expect(initialStores.length).toBeGreaterThanOrEqual(4);
@@ -237,7 +259,7 @@ describe('Unit Tests: Error Hierarchy & Domain Services', () => {
           storeName: "Trader Joe's",
           imageData: sampleBase64Image,
         },
-        adminUser
+        shopperUser
       );
 
       expect(item.name).toBe('Everything But The Bagel Seasoning');
@@ -250,11 +272,11 @@ describe('Unit Tests: Error Hierarchy & Domain Services', () => {
       expect(updatedStores.some((s) => s.name === "Trader Joe's")).toBe(true);
 
       // Case-insensitive store deduplication check
-      const dupStore = findOrCreateStore(db, "trader joe's", adminUser.id);
+      const dupStore = findOrCreateStore(db, "trader joe's", shopperUser.id);
       expect(dupStore.created).toBe(false);
 
       // Update item to checked
-      const checkedItem = updateItem(db, item.id, { checked: true }, adminUser);
+      const checkedItem = updateItem(db, item.id, { checked: true }, shopperUser);
       expect(checkedItem.checked).toBe(true);
 
       // Batch offline sync mutations
@@ -278,7 +300,7 @@ describe('Unit Tests: Error Hierarchy & Domain Services', () => {
             },
           },
         ],
-        adminUser
+        shopperUser
       );
 
       expect(syncResult.applied).toBe(2);

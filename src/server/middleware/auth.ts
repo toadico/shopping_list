@@ -97,3 +97,19 @@ export function requireAdmin(req: Request, _res: Response, next: NextFunction): 
     next(err);
   }
 }
+
+export function requireShopper(req: Request, _res: Response, next: NextFunction): void {
+  try {
+    if (!req.user) {
+      throw new UnauthorizedError('Authentication required');
+    }
+    if (req.user.username === 'shopping_admin' || req.user.role === 'admin') {
+      throw new ForbiddenError(
+        'The shopping_admin account does not have access to the shopping list'
+      );
+    }
+    next();
+  } catch (err) {
+    next(err);
+  }
+}
