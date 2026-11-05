@@ -1,0 +1,281 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { createDatabase, type DbInstance } from '../../src/server/db/database.js';
+import {
+  AppError,
+  ConflictError,
+  ForbiddenError,
+  NotFoundError,
+  UnauthorizedError,
+  ValidationError,
+} from '../../src/server/errors/AppError.js';
+import {
+  authenticateByApiKey,
+  bootstrapAdminAccount,
+  createInviteQr,
+  loginAdmin,
+  printAdminPasswordBanner,
+  redeemInviteToken,
+  verifyInviteToken,
+} from '../../src/server/services/authService.js';
+import {
+  listUsers,
+  revokeUserAccess,
+  updateUserStatus,
+} from '../../src/server/services/userService.js';
+import { findOrCreateStore, listStores } from '../../src/server/services/storeService.js';
+import {
+  createItem,
+  deleteItem,
+  listItems,
+  syncOfflineMutations,
+  updateItem,
+} from '../../src/server/services/itemService.js';
+import {
+  addSseClient,
+  broadcastEvent,
+  closeAllSseClients,
+  disconnectUserSseClients,
+} from '../../src/server/services/eventHub.js';
+import type { Response } from 'express';
+
+describe('Unit Tests: Error Hierarchy & Domain Services', () => {
+  let db: DbInstance;
+
+  beforeEach(() => {
+    db = createDatabase(':memory:');
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  describe('Custom Error Hierarchy', () => {
+    it('constructs AppError subclasses with expected HTTP status codes and codes', () => {
+      const base = new AppError('Something failed', 500, 'INTERNAL_ERROR');
+      expect(base.statusCode).toBe(500);
+      expect(base.isOperational).toBe(true);
+
+      const validation = new ValidationError('Invalid field', [
+        { field: 'name', message: 'Required' },
+      ]);
+      expect(validation.statusCode).toBe(400);
+      expect(validation.code).toBe('VALIDATION_ERROR');
+      expect(validation.details).toHaveLength(1);
+
+      expect(new UnauthorizedError().statusCode).toBe(401);
+      expect(new ForbiddenError().statusCode).toBe(403);
+      expect(new NotFoundError('Item').statusCode).toBe(404);
+      expect(new ConflictError().statusCode).toBe(409);
+    });
+  });
+
+  describe('Admin Bootstrap & Console Banner', () => {
+    it('randomly generates shopping_admin password on first start and reuses stored password on subsequent starts', () => {
+      const firstBoot = bootstrapAdminAccount(db);
+      expect(firstBoot.username).toBe('shopping_admin');
+      expect(firstBoot.created).toBe(true);
+      expect(firstBoot.password.length).toBeGreaterThanOrEqual(16);
+
+      const secondBoot = bootstrapAdminAccount(db);
+      expect(secondBoot.created).toBe(false);
+      expect(secondBoot.password).toBe(firstBoot.password);
+
+      const loginResult = loginAdmin(db, 'shopping_admin', firstBoot.password);
+      expect(loginResult.user.username).toBe('shopping_admin');
+      expect(loginResult.user.role).toBe('admin');
+      expect(loginResult.apiKey).toMatch(/^slk_/);
+    });
+
+    it('prints the shopping_admin credentials to stdout console', () => {
+      const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+      printAdminPasswordBanner('test-secret-pass-123');
+      expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('shopping_admin'));
+      expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('test-secret-pass-123'));
+      stdoutSpy.mockRestore();
+    });
+  });
+
+  describe('QR Code Onboarding & User Access Lifecycle', () => {
+    it('allows admin or active users to create QR invites, onboard new users, and lets admin disable or revoke access', async () => {
+      const { password } = bootstrapAdminAccount(db);
+      const { user: adminUser } = loginAdmin(db, 'shopping_admin', password);
+
+      // Admin creates a QR invite (grantsManageUsers = true)
+      const invite = await createInviteQr(db, adminUser, 'http://localhost:3000', 2);
+      expect(invite.qrCodeDataUrl).toMatch(/^data:image\/png;base64,/);
+      expect(invite.inviteUrl).toContain(`/?invite=${encodeURIComponent(invite.token)}`);
+      expect(invite.grantsManageUsers).toBe(true);
+
+      // Verify invite token
+      const verified = verifyInviteToken(db, invite.token);
+      expect(verified.createdByName).toBe('Shopping Administrator');
+      expect(verified.grantsManageUsers).toBe(true);
+
+      // New user 1 joins using shopping_admin's QR invite token -> receives canManageUsers = true
+      const joined1 = redeemInviteToken(db, invite.token, 'Alice Shopper');
+      expect(joined1.user.name).toBe('Alice Shopper');
+      expect(joined1.user.role).toBe('user');
+      expect(joined1.user.canManageUsers).toBe(true);
+      expect(joined1.apiKey).toMatch(/^slk_/);
+
+      // Alice (even though she has canManageUsers = true) creates an invite QR code for Bob -> does NOT pass manage users right
+      const aliceInvite = await createInviteQr(db, joined1.user, 'http://localhost:3000', 1);
+      expect(aliceInvite.grantsManageUsers).toBe(false);
+      const joined2 = redeemInviteToken(db, aliceInvite.token, 'Bob Buyer');
+      expect(joined2.user.invitedBy).toBe(joined1.user.id);
+      expect(joined2.user.canManageUsers).toBe(false);
+
+      // AliceInvite had maxUses = 1, so a second redemption must fail with ForbiddenError
+      expect(() => redeemInviteToken(db, aliceInvite.token, 'Charlie')).toThrow(ForbiddenError);
+
+      // Admin sees all users
+      const allUsers = listUsers(db);
+      expect(allUsers.length).toBe(3);
+
+      // Admin disables Alice
+      const disabledAlice = updateUserStatus(db, joined1.user.id, 'disabled');
+      expect(disabledAlice.status).toBe('disabled');
+      expect(() => authenticateByApiKey(db, joined1.apiKey)).toThrow(ForbiddenError);
+
+      // Admin re-enables Alice
+      updateUserStatus(db, joined1.user.id, 'active');
+      expect(authenticateByApiKey(db, joined1.apiKey).id).toBe(joined1.user.id);
+
+      // Admin revokes Alice's API key access
+      revokeUserAccess(db, joined1.user.id);
+      expect(() => authenticateByApiKey(db, joined1.apiKey)).toThrow(ForbiddenError);
+
+      // Admin cannot disable or revoke shopping_admin itself
+      expect(() => updateUserStatus(db, adminUser.id, 'revoked')).toThrow(ConflictError);
+    });
+  });
+
+  describe('Stores & Shopping Items with Inline Store Creation and Pictures', () => {
+    it('creates items, automatically adds typed store names to selectable stores, attaches pictures, and syncs offline mutations', () => {
+      const { password } = bootstrapAdminAccount(db);
+      const { user: adminUser } = loginAdmin(db, 'shopping_admin', password);
+
+      const initialStores = listStores(db);
+      expect(initialStores.length).toBeGreaterThanOrEqual(4);
+
+      const sampleBase64Image =
+        'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+
+      // Add item with a brand-new typed store name ("Trader Joe's") and a picture
+      const item = createItem(
+        db,
+        {
+          name: 'Everything But The Bagel Seasoning',
+          quantity: '2 jars',
+          notes: 'Spice aisle',
+          storeName: "Trader Joe's",
+          imageData: sampleBase64Image,
+        },
+        adminUser
+      );
+
+      expect(item.name).toBe('Everything But The Bagel Seasoning');
+      expect(item.storeName).toBe("Trader Joe's");
+      expect(item.imageData).toBe(sampleBase64Image);
+      expect(item.checked).toBe(false);
+
+      // Verify "Trader Joe's" is now in the selectable stores list
+      const updatedStores = listStores(db);
+      expect(updatedStores.some((s) => s.name === "Trader Joe's")).toBe(true);
+
+      // Case-insensitive store deduplication check
+      const dupStore = findOrCreateStore(db, "trader joe's", adminUser.id);
+      expect(dupStore.created).toBe(false);
+
+      // Update item to checked
+      const checkedItem = updateItem(db, item.id, { checked: true }, adminUser);
+      expect(checkedItem.checked).toBe(true);
+
+      // Batch offline sync mutations
+      const syncResult = syncOfflineMutations(
+        db,
+        [
+          {
+            type: 'create',
+            itemId: 'offline-item-1',
+            payload: {
+              name: 'Sourdough Bread',
+              quantity: '1 loaf',
+              storeName: 'Local Bakery',
+            },
+          },
+          {
+            type: 'update',
+            itemId: 'offline-item-1',
+            payload: {
+              checked: true,
+            },
+          },
+        ],
+        adminUser
+      );
+
+      expect(syncResult.applied).toBe(2);
+      const allItems = listItems(db);
+      expect(allItems.some((i) => i.id === 'offline-item-1' && i.checked)).toBe(true);
+
+      // Delete item
+      deleteItem(db, item.id);
+      expect(listItems(db).some((i) => i.id === item.id)).toBe(false);
+    });
+  });
+
+  describe('Real-Time Multi-Device Event Hub (SSE)', () => {
+    it('broadcasts updates to connected device streams and disconnects revoked users', () => {
+      const writes1: string[] = [];
+      const writes2: string[] = [];
+      let ended1 = false;
+
+      const mockRes1 = {
+        write: (chunk: string) => {
+          writes1.push(chunk);
+          return true;
+        },
+        end: () => {
+          ended1 = true;
+        },
+      } as unknown as Response;
+
+      const mockRes2 = {
+        write: (chunk: string) => {
+          writes2.push(chunk);
+          return true;
+        },
+        end: () => {},
+      } as unknown as Response;
+
+      addSseClient('client-1', 'user-1', mockRes1);
+      addSseClient('client-2', 'user-2', mockRes2);
+
+      broadcastEvent({
+        type: 'items_updated',
+        items: [],
+        timestamp: new Date().toISOString(),
+      });
+
+      expect(writes1).toHaveLength(1);
+      expect(writes1[0]).toContain('"type":"items_updated"');
+      expect(writes2).toHaveLength(1);
+
+      // Disconnect user-1 (e.g., when admin disables/revokes user-1)
+      disconnectUserSseClients('user-1');
+      expect(ended1).toBe(true);
+
+      // Subsequent broadcast only goes to user-2
+      broadcastEvent({
+        type: 'stores_updated',
+        stores: [],
+        timestamp: new Date().toISOString(),
+      });
+      expect(writes1).toHaveLength(1);
+      expect(writes2).toHaveLength(2);
+
+      closeAllSseClients();
+    });
+  });
+});
