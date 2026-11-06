@@ -1214,24 +1214,16 @@ export default function ShoppingListApp() {
                           />
                         )}
 
-                        <div>
+                        <div style={{ minWidth: 0, flex: 1 }}>
                           <div
                             style={{
                               fontWeight: 600,
                               fontSize: '1rem',
                               textDecoration: item.checked ? 'line-through' : 'none',
+                              overflowWrap: 'anywhere',
                             }}
                           >
-                            {item.name}{' '}
-                            <span
-                              style={{
-                                fontWeight: 400,
-                                fontSize: '0.85rem',
-                                color: 'var(--text-secondary)',
-                              }}
-                            >
-                              × {item.quantity}
-                            </span>
+                            {item.name}
                           </div>
 
                           <div
@@ -1264,46 +1256,48 @@ export default function ShoppingListApp() {
                       </div>
 
                       <div className="item-actions">
-                        <div
-                          className="quantity-stepper"
-                          role="group"
-                          aria-label={`Quantity controls for ${item.name}`}
-                        >
+                        {!item.checked ? (
+                          <div
+                            className="quantity-stepper"
+                            role="group"
+                            aria-label={`Quantity controls for ${item.name}`}
+                          >
+                            <button
+                              type="button"
+                              className="quantity-btn"
+                              onClick={() => handleUpdateItemQuantity(item, -1)}
+                              disabled={numericQuantity <= 1}
+                              aria-label={`Decrease quantity for ${item.name}`}
+                              title="Subtract 1"
+                            >
+                              −
+                            </button>
+                            <span
+                              className="quantity-value"
+                              aria-live="polite"
+                              data-testid={`item-quantity-${item.id}`}
+                            >
+                              {numericQuantity}
+                            </span>
+                            <button
+                              type="button"
+                              className="quantity-btn"
+                              onClick={() => handleUpdateItemQuantity(item, 1)}
+                              aria-label={`Increase quantity for ${item.name}`}
+                              title="Add 1"
+                            >
+                              +
+                            </button>
+                          </div>
+                        ) : (
                           <button
                             type="button"
-                            className="quantity-btn"
-                            onClick={() => handleUpdateItemQuantity(item, -1)}
-                            disabled={numericQuantity <= 1}
-                            aria-label={`Decrease quantity for ${item.name}`}
-                            title="Subtract 1"
+                            className="btn btn-sm btn-danger"
+                            onClick={() => handleDeleteItem(item.id)}
                           >
-                            −
+                            Delete
                           </button>
-                          <span
-                            className="quantity-value"
-                            aria-live="polite"
-                            data-testid={`item-quantity-${item.id}`}
-                          >
-                            {numericQuantity}
-                          </span>
-                          <button
-                            type="button"
-                            className="quantity-btn"
-                            onClick={() => handleUpdateItemQuantity(item, 1)}
-                            aria-label={`Increase quantity for ${item.name}`}
-                            title="Add 1"
-                          >
-                            +
-                          </button>
-                        </div>
-
-                        <button
-                          type="button"
-                          className="btn btn-sm btn-danger"
-                          onClick={() => handleDeleteItem(item.id)}
-                        >
-                          Delete
-                        </button>
+                        )}
                       </div>
                     </div>
                   );

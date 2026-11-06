@@ -62,6 +62,7 @@ body {
   border-radius: 9999px;
   font-size: 0.75rem;
   font-weight: 600;
+  white-space: nowrap;
 }
 
 .badge-online {
@@ -204,6 +205,10 @@ body {
 }
 
 .store-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  white-space: nowrap;
   padding: 0.3rem 0.7rem;
   border-radius: 999px;
   font-size: 0.8rem;
@@ -246,6 +251,7 @@ body {
   align-items: center;
   gap: 0.85rem;
   flex: 1;
+  min-width: 0;
 }
 
 .item-checkbox {
@@ -253,6 +259,7 @@ body {
   height: 22px;
   accent-color: var(--accent);
   cursor: pointer;
+  flex-shrink: 0;
 }
 
 .item-thumb {
