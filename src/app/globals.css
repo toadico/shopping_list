@@ -233,9 +233,9 @@ body {
 
 .item-row {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.6rem;
   padding: 0.9rem 1rem;
   background: var(--bg-primary);
   border: 1px solid var(--border);
@@ -244,6 +244,21 @@ body {
 
 .item-row.checked {
   opacity: 0.6;
+}
+
+.item-name-row {
+  width: 100%;
+  font-weight: 600;
+  font-size: 1rem;
+  overflow-wrap: anywhere;
+}
+
+.item-body-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  width: 100%;
 }
 
 .item-main {

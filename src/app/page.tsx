@@ -1195,109 +1195,108 @@ export default function ShoppingListApp() {
                       key={item.id}
                       className={`item-row ${item.checked ? 'checked' : ''}`}
                     >
-                      <div className="item-main">
-                        <input
-                          type="checkbox"
-                          className="item-checkbox"
-                          checked={item.checked}
-                          onChange={() => handleToggleItemChecked(item)}
-                          aria-label={`Mark ${item.name} as ${item.checked ? 'unpurchased' : 'purchased'}`}
-                        />
-
-                        {item.imageData && (
-                          <img
-                            src={item.imageData}
-                            alt={item.name}
-                            className="item-thumb"
-                            onClick={() => setPreviewImage(item.imageData)}
-                            title="Click to enlarge attached picture"
-                          />
-                        )}
-
-                        <div style={{ minWidth: 0, flex: 1 }}>
-                          <div
-                            style={{
-                              fontWeight: 600,
-                              fontSize: '1rem',
-                              textDecoration: item.checked ? 'line-through' : 'none',
-                              overflowWrap: 'anywhere',
-                            }}
-                          >
-                            {item.name}
-                          </div>
-
-                          <div
-                            style={{
-                              display: 'flex',
-                              gap: '0.5rem',
-                              alignItems: 'center',
-                              flexWrap: 'wrap',
-                              marginTop: '0.25rem',
-                            }}
-                          >
-                            <span className="badge badge-store">🏬 {item.storeName}</span>
-                            <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
-                              Added by {item.createdByName}
-                            </span>
-                          </div>
-
-                          {item.notes && (
-                            <div
-                              style={{
-                                fontSize: '0.85rem',
-                                color: 'var(--text-secondary)',
-                                marginTop: '0.25rem',
-                              }}
-                            >
-                              📝 {item.notes}
-                            </div>
-                          )}
-                        </div>
+                      <div
+                        className="item-name-row"
+                        style={{
+                          textDecoration: item.checked ? 'line-through' : 'none',
+                        }}
+                      >
+                        {item.name}
                       </div>
 
-                      <div className="item-actions">
-                        {!item.checked ? (
-                          <div
-                            className="quantity-stepper"
-                            role="group"
-                            aria-label={`Quantity controls for ${item.name}`}
-                          >
-                            <button
-                              type="button"
-                              className="quantity-btn"
-                              onClick={() => handleUpdateItemQuantity(item, -1)}
-                              disabled={numericQuantity <= 1}
-                              aria-label={`Decrease quantity for ${item.name}`}
-                              title="Subtract 1"
+                      <div className="item-body-row">
+                        <div className="item-main">
+                          <input
+                            type="checkbox"
+                            className="item-checkbox"
+                            checked={item.checked}
+                            onChange={() => handleToggleItemChecked(item)}
+                            aria-label={`Mark ${item.name} as ${item.checked ? 'unpurchased' : 'purchased'}`}
+                          />
+
+                          {item.imageData && (
+                            <img
+                              src={item.imageData}
+                              alt={item.name}
+                              className="item-thumb"
+                              onClick={() => setPreviewImage(item.imageData)}
+                              title="Click to enlarge attached picture"
+                            />
+                          )}
+
+                          <div style={{ minWidth: 0, flex: 1 }}>
+                            <div
+                              style={{
+                                display: 'flex',
+                                gap: '0.5rem',
+                                alignItems: 'center',
+                                flexWrap: 'wrap',
+                              }}
                             >
-                              −
-                            </button>
-                            <span
-                              className="quantity-value"
-                              aria-live="polite"
-                              data-testid={`item-quantity-${item.id}`}
-                            >
-                              {numericQuantity}
-                            </span>
-                            <button
-                              type="button"
-                              className="quantity-btn"
-                              onClick={() => handleUpdateItemQuantity(item, 1)}
-                              aria-label={`Increase quantity for ${item.name}`}
-                              title="Add 1"
-                            >
-                              +
-                            </button>
+                              <span className="badge badge-store">🏬 {item.storeName}</span>
+                              <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                                Added by {item.createdByName}
+                              </span>
+                            </div>
+
+                            {item.notes && (
+                              <div
+                                style={{
+                                  fontSize: '0.85rem',
+                                  color: 'var(--text-secondary)',
+                                  marginTop: '0.25rem',
+                                }}
+                              >
+                                📝 {item.notes}
+                              </div>
+                            )}
                           </div>
-                        ) : (
-                          <button
-                            type="button"
-                            className="btn btn-sm btn-danger"
-                            onClick={() => handleDeleteItem(item.id)}
-                          >
-                            Delete
-                          </button>
-                        )}
+                        </div>
+
+                        <div className="item-actions">
+                          {!item.checked ? (
+                            <div
+                              className="quantity-stepper"
+                              role="group"
+                              aria-label={`Quantity controls for ${item.name}`}
+                            >
+                              <button
+                                type="button"
+                                className="quantity-btn"
+                                onClick={() => handleUpdateItemQuantity(item, -1)}
+                                disabled={numericQuantity <= 1}
+                                aria-label={`Decrease quantity for ${item.name}`}
+                                title="Subtract 1"
+                              >
+                                −
+                              </button>
+                              <span
+                                className="quantity-value"
+                                aria-live="polite"
+                                data-testid={`item-quantity-${item.id}`}
+                              >
+                                {numericQuantity}
+                              </span>
+                              <button
+                                type="button"
+                                className="quantity-btn"
+                                onClick={() => handleUpdateItemQuantity(item, 1)}
+                                aria-label={`Increase quantity for ${item.name}`}
+                                title="Add 1"
+                              >
+                                +
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              className="btn btn-sm btn-danger"
+                              onClick={() => handleDeleteItem(item.id)}
+                            >
+                              Delete
+                            </button>
+                          )}
+                        </div>
                       </div>
                     </div>
                   );
