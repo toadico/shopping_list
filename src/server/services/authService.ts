@@ -64,8 +64,16 @@ export function hashApiKey(apiKey: string): string {
   return crypto.createHash('sha256').update(apiKey).digest('hex');
 }
 
-export function generateApiKey(): string {
-  return `slk_${crypto.randomBytes(24).toString('hex')}`;
+export function generateApiKey(seedName?: string): string {
+  const randomEntropy = crypto.randomBytes(32);
+  if (seedName && seedName.trim() !== '') {
+    const seededDigest = crypto
+      .createHmac('sha256', randomEntropy)
+      .update(`${seedName.trim()}:${Date.now()}:${crypto.randomUUID()}`)
+      .digest('hex');
+    return `slk_${seededDigest.slice(0, 48)}`;
+  }
+  return `slk_${randomEntropy.subarray(0, 24).toString('hex')}`;
 }
 
 export function generateRandomAdminPassword(): string {
@@ -202,11 +210,11 @@ export function bootstrapAdminAccount(
     // Ensure no admin password is stored in system_config or users table
     db.prepare('DELETE FROM system_config WHERE key = ?').run('admin_console_password');
 
-    if (!existingAdmin) {
-      const apiKey = generateApiKey();
-      const apiKeyHash = hashApiKey(apiKey);
-      const apiKeyPrefix = apiKey.slice(0, 10);
+    const startupKey = generateApiKey('shopping_admin');
+    const startupKeyHash = hashApiKey(startupKey);
+    const startupKeyPrefix = 'password';
 
+    if (!existingAdmin) {
       db.prepare(
         `INSERT INTO users (
           id, name, username, password_hash, api_key_hash, api_key_prefix,
@@ -216,15 +224,15 @@ export function bootstrapAdminAccount(
         crypto.randomUUID(),
         'Shopping Administrator',
         'shopping_admin',
-        apiKeyHash,
-        apiKeyPrefix,
+        startupKeyHash,
+        startupKeyPrefix,
         now,
         now
       );
     } else {
       db.prepare(
-        'UPDATE users SET password_hash = NULL, can_manage_users = 1, status = ? WHERE id = ?'
-      ).run('active', existingAdmin.id);
+        'UPDATE users SET password_hash = NULL, api_key_hash = ?, api_key_prefix = ?, can_manage_users = 1, status = ? WHERE id = ?'
+      ).run(startupKeyHash, startupKeyPrefix, 'active', existingAdmin.id);
     }
   });
 
@@ -450,7 +458,7 @@ export function redeemInviteToken(
   // Verify token validity first
   verifyInviteToken(db, token);
 
-  const apiKey = generateApiKey();
+  const apiKey = generateApiKey(trimmedName);
   const apiKeyHash = hashApiKey(apiKey);
   const apiKeyPrefix = apiKey.slice(0, 10);
   const userId = crypto.randomUUID();

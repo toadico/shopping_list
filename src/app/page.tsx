@@ -113,6 +113,9 @@ export default function ShoppingListApp() {
   const [selectedStoreName, setSelectedStoreName] = useState('Supermarket');
   const [customStoreInput, setCustomStoreInput] = useState('');
   const [addStoreModalOpen, setAddStoreModalOpen] = useState(false);
+  const [editingStoreId, setEditingStoreId] = useState<string | null>(null);
+  const [editingStoreName, setEditingStoreName] = useState('');
+  const [storeModalError, setStoreModalError] = useState<string | null>(null);
   const [attachedImage, setAttachedImage] = useState<string | null>(null);
   const [submittingItem, setSubmittingItem] = useState(false);
 
@@ -393,12 +396,19 @@ export default function ShoppingListApp() {
   }, [apiKey, currentUser, isOnline, loadListAndStores]);
 
   const handleSaveSession = async (user: UserProfile, key: string) => {
-    localStorage.setItem(API_KEY_STORAGE_KEY, key);
-    localStorage.setItem('shopping_list_user_profile', JSON.stringify(user));
-    await saveApiKeyToOfflineStore(key);
+    const isAdminAccount = user.role === 'admin' || user.username === 'shopping_admin';
+    if (!isAdminAccount) {
+      localStorage.setItem(API_KEY_STORAGE_KEY, key);
+      localStorage.setItem('shopping_list_user_profile', JSON.stringify(user));
+      await saveApiKeyToOfflineStore(key);
+    } else {
+      localStorage.removeItem(API_KEY_STORAGE_KEY);
+      localStorage.removeItem('shopping_list_user_profile');
+      await saveApiKeyToOfflineStore(null);
+    }
     setApiKey(key);
     setCurrentUser(user);
-    if (user.role === 'admin' || user.username === 'shopping_admin') {
+    if (isAdminAccount) {
       setAdminTabOpen(true);
       await fetchAllUsersForAdmin(key);
     } else {
@@ -447,6 +457,12 @@ export default function ShoppingListApp() {
         setErrorMsg(data?.error?.message || 'Invalid or revoked API key');
         return;
       }
+      if (data.user?.role === 'admin' || data.user?.username === 'shopping_admin') {
+        setErrorMsg(
+          'The shopping_admin account can only sign in using the container startup password.'
+        );
+        return;
+      }
       await handleSaveSession(data.user, trimmed);
     } catch {
       setErrorMsg('Unable to verify API key right now.');
@@ -490,31 +506,35 @@ export default function ShoppingListApp() {
     setAdminTabOpen(false);
   };
 
-  // Add Store from popup modal to selectable store button list
+  // Add Store from Manage Stores modal to selectable store button list
   const handleAddCustomStore = async (e?: React.FormEvent) => {
     e?.preventDefault();
+    setStoreModalError(null);
     const trimmed = customStoreInput.trim();
     if (!trimmed) {
       return;
     }
-    setSelectedStoreName(trimmed);
-    setCustomStoreInput('');
-    setAddStoreModalOpen(false);
 
     const exists = stores.some((s) => s.name.toLowerCase() === trimmed.toLowerCase());
-    if (!exists) {
-      const optimisticStore: Store = {
-        id: `local-${Date.now()}`,
-        name: trimmed,
-        createdBy: currentUser?.id ?? null,
-        createdAt: new Date().toISOString(),
-      };
-      const updatedStores = [...stores, optimisticStore].sort((a, b) =>
-        a.name.localeCompare(b.name)
-      );
-      setStores(updatedStores);
-      await saveCachedStores(updatedStores);
+    if (exists) {
+      setStoreModalError(`Store "${trimmed}" already exists.`);
+      return;
     }
+
+    setSelectedStoreName(trimmed);
+    setCustomStoreInput('');
+
+    const optimisticStore: Store = {
+      id: `local-${Date.now()}`,
+      name: trimmed,
+      createdBy: currentUser?.id ?? null,
+      createdAt: new Date().toISOString(),
+    };
+    const updatedStores = [...stores, optimisticStore].sort((a, b) =>
+      a.name.localeCompare(b.name)
+    );
+    setStores(updatedStores);
+    await saveCachedStores(updatedStores);
 
     if (apiKey && isOnline) {
       try {
@@ -538,6 +558,84 @@ export default function ShoppingListApp() {
         }
       } catch {
         // Store will be created automatically when item is synced
+      }
+    }
+  };
+
+  // Edit / Rename an existing store in Manage Stores modal
+  const handleUpdateStore = async (store: Store, e?: React.FormEvent) => {
+    e?.preventDefault();
+    setStoreModalError(null);
+    const trimmed = editingStoreName.trim();
+    if (!trimmed) {
+      setStoreModalError('Store name cannot be empty.');
+      return;
+    }
+    if (trimmed === store.name) {
+      setEditingStoreId(null);
+      setEditingStoreName('');
+      return;
+    }
+
+    const duplicate = stores.some(
+      (s) => s.id !== store.id && s.name.toLowerCase() === trimmed.toLowerCase()
+    );
+    if (duplicate) {
+      setStoreModalError(`A store named "${trimmed}" already exists.`);
+      return;
+    }
+
+    const previousName = store.name;
+    const updatedStores = stores
+      .map((s) => (s.id === store.id ? { ...s, name: trimmed } : s))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    setStores(updatedStores);
+    await saveCachedStores(updatedStores);
+
+    const updatedItems = items.map((item) =>
+      item.storeId === store.id || item.storeName.toLowerCase() === previousName.toLowerCase()
+        ? { ...item, storeName: trimmed, updatedAt: new Date().toISOString() }
+        : item
+    );
+    setItems(updatedItems);
+    await saveCachedItems(updatedItems);
+
+    if (selectedStoreName.toLowerCase() === previousName.toLowerCase()) {
+      setSelectedStoreName(trimmed);
+    }
+    if (filterStore !== 'ALL' && filterStore.toLowerCase() === previousName.toLowerCase()) {
+      setFilterStore(trimmed);
+    }
+
+    setEditingStoreId(null);
+    setEditingStoreName('');
+
+    if (apiKey && isOnline) {
+      try {
+        const res = await fetch(`/api/stores/${encodeURIComponent(store.id)}`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({ name: trimmed }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data.stores)) {
+            setStores(data.stores);
+            await saveCachedStores(data.stores);
+          }
+          if (Array.isArray(data.items)) {
+            setItems(data.items);
+            await saveCachedItems(data.items);
+          }
+        } else {
+          const errData = await res.json().catch(() => ({}));
+          setStoreModalError(errData?.error?.message || 'Failed to update store name');
+        }
+      } catch {
+        // Optimistic update already saved locally
       }
     }
   };
@@ -1412,10 +1510,13 @@ export default function ShoppingListApp() {
                       e.preventDefault();
                       e.stopPropagation();
                       setCustomStoreInput('');
+                      setEditingStoreId(null);
+                      setEditingStoreName('');
+                      setStoreModalError(null);
                       setAddStoreModalOpen(true);
                     }}
                   >
-                    ➕ Add Store
+                    🏬 Manage Stores
                   </button>
                 </div>
               </div>
@@ -1499,10 +1600,10 @@ export default function ShoppingListApp() {
         </>
       )}
 
-      {/* Shared Shopping List Management Bar (Bottom of Page) */}
+      {/* User Management Bar (Bottom of Page) */}
       <footer className="header-bar">
         <div className="brand-title">
-          <span>🛒 Shared Shopping List</span>
+          <span>👥 User Management</span>
           <span className={`badge ${isOnline ? 'badge-online' : 'badge-offline'}`}>
             {isOnline ? '● Online' : '⚡ Offline Cache Mode'}
           </span>
@@ -1519,7 +1620,7 @@ export default function ShoppingListApp() {
             {currentUser.role === 'admin'
               ? 'admin'
               : currentUser.canManageUsers
-                ? 'user · manager'
+                ? 'Manager'
                 : 'user'}
             )
           </span>
@@ -1594,7 +1695,7 @@ export default function ShoppingListApp() {
                         {u.role === 'admin'
                           ? 'admin (full)'
                           : u.canManageUsers
-                            ? 'user (can manage users)'
+                            ? 'Manager'
                             : 'user'}
                       </td>
                       <td>
@@ -1649,34 +1750,43 @@ export default function ShoppingListApp() {
         </section>
       )}
 
-      {/* Add Store Popup Modal */}
+      {/* Manage Stores Popup Modal */}
       {addStoreModalOpen && (
         <div
           className="modal-backdrop"
           onClick={() => {
             setAddStoreModalOpen(false);
             setCustomStoreInput('');
+            setEditingStoreId(null);
+            setEditingStoreName('');
+            setStoreModalError(null);
           }}
         >
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <div className="card-title">
-              <span>🏬 Add New Store</span>
+              <span>🏬 Manage Stores</span>
               <button
                 type="button"
                 className="btn btn-sm btn-secondary"
                 onClick={() => {
                   setAddStoreModalOpen(false);
                   setCustomStoreInput('');
+                  setEditingStoreId(null);
+                  setEditingStoreName('');
+                  setStoreModalError(null);
                 }}
               >
                 Close
               </button>
             </div>
-            <form onSubmit={handleAddCustomStore}>
-              <div className="form-group">
-                <label className="form-label" htmlFor="new-store-modal-input">
-                  Store Name
-                </label>
+
+            {storeModalError && <div className="alert alert-error">{storeModalError}</div>}
+
+            <form onSubmit={handleAddCustomStore} style={{ marginBottom: '1.25rem' }}>
+              <label className="form-label" htmlFor="new-store-modal-input">
+                Add New Store
+              </label>
+              <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.35rem' }}>
                 <input
                   id="new-store-modal-input"
                   className="input"
@@ -1684,31 +1794,100 @@ export default function ShoppingListApp() {
                   placeholder="e.g., Trader Joe's"
                   value={customStoreInput}
                   onChange={(e) => setCustomStoreInput(e.target.value)}
-                  autoFocus
-                  required
                 />
-              </div>
-              <div style={{ display: 'flex', gap: '0.5rem' }}>
                 <button
                   type="submit"
                   className="btn btn-primary"
-                  style={{ flex: 1 }}
+                  style={{ flexShrink: 0 }}
                   disabled={!customStoreInput.trim()}
                 >
-                  Save Store
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  onClick={() => {
-                    setAddStoreModalOpen(false);
-                    setCustomStoreInput('');
-                  }}
-                >
-                  Cancel
+                  Add Store
                 </button>
               </div>
             </form>
+
+            <div>
+              <div className="form-label" style={{ marginBottom: '0.5rem' }}>
+                Current Stores ({stores.length})
+              </div>
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '0.5rem',
+                  maxHeight: '280px',
+                  overflowY: 'auto',
+                }}
+              >
+                {stores.map((store) => (
+                  <div
+                    key={store.id}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: '0.5rem',
+                      padding: '0.55rem 0.75rem',
+                      background: 'var(--bg-primary)',
+                      border: '1px solid var(--border)',
+                      borderRadius: 8,
+                    }}
+                  >
+                    {editingStoreId === store.id ? (
+                      <form
+                        onSubmit={(e) => handleUpdateStore(store, e)}
+                        style={{ display: 'flex', gap: '0.4rem', width: '100%', alignItems: 'center' }}
+                      >
+                        <input
+                          className="input"
+                          type="text"
+                          value={editingStoreName}
+                          onChange={(e) => setEditingStoreName(e.target.value)}
+                          style={{ padding: '0.4rem 0.65rem', fontSize: '0.9rem' }}
+                          autoFocus
+                          required
+                        />
+                        <button
+                          type="submit"
+                          className="btn btn-sm btn-primary"
+                          disabled={!editingStoreName.trim()}
+                        >
+                          Save
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-secondary"
+                          onClick={() => {
+                            setEditingStoreId(null);
+                            setEditingStoreName('');
+                            setStoreModalError(null);
+                          }}
+                        >
+                          Cancel
+                        </button>
+                      </form>
+                    ) : (
+                      <>
+                        <span style={{ fontWeight: 500, overflowWrap: 'anywhere' }}>
+                          🏬 {store.name}
+                        </span>
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-secondary"
+                          onClick={() => {
+                            setEditingStoreId(store.id);
+                            setEditingStoreName(store.name);
+                            setStoreModalError(null);
+                          }}
+                        >
+                          Edit
+                        </button>
+                      </>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -1793,21 +1972,6 @@ export default function ShoppingListApp() {
                 width={260}
                 height={260}
               />
-            </div>
-            <div
-              style={{
-                fontSize: '0.8rem',
-                color: 'var(--text-secondary)',
-                wordBreak: 'break-all',
-                marginBottom: '1rem',
-              }}
-            >
-              <div>
-                <strong>Invite Link:</strong> {generatedInvite.inviteUrl}
-              </div>
-              <div>
-                <strong>Invite Token:</strong> <code>{generatedInvite.token}</code>
-              </div>
             </div>
             <button
               type="button"

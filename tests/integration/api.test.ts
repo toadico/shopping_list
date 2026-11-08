@@ -23,6 +23,7 @@ describe('Integration Tests: Express API Routes, Security & Probes', () => {
       .send({ username: 'shopping_admin', password: adminPassword });
 
     expect(loginRes.status).toBe(200);
+    expect(loginRes.headers['set-cookie']).toBeUndefined();
     adminApiKey = loginRes.body.apiKey;
   });
 
@@ -41,6 +42,29 @@ describe('Integration Tests: Express API Routes, Security & Probes', () => {
       const readyRes = await request(app).get('/ready');
       expect(readyRes.status).toBe(200);
       expect(readyRes.body.status).toBe('ready');
+    });
+
+    it('enforces PUBLIC_BASE_URL host and origin restrictions when configured', async () => {
+      const restrictedApp = createApp({
+        enableRateLimit: false,
+        publicBaseUrl: 'https://shopping.example.com',
+      });
+
+      const wrongHostRes = await request(restrictedApp)
+        .get('/api/items')
+        .set('Host', 'evil.example.com');
+      expect(wrongHostRes.status).toBe(403);
+
+      const wrongOriginRes = await request(restrictedApp)
+        .get('/api/items')
+        .set('Host', 'shopping.example.com')
+        .set('Origin', 'https://attacker.example.com');
+      expect(wrongOriginRes.status).toBe(403);
+
+      const allowedHostRes = await request(restrictedApp)
+        .get('/api/items')
+        .set('Host', 'shopping.example.com');
+      expect(allowedHostRes.status).toBe(401);
     });
 
     it('returns 503 on /healthz and /ready when shutting down', async () => {

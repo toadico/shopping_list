@@ -77,6 +77,14 @@ export function requireAuth(req: Request, _res: Response, next: NextFunction): v
   try {
     const apiKey = extractApiKey(req);
     const user = authenticateByApiKey(getDb(), apiKey);
+    const hasHeaderKey =
+      Boolean(req.headers.authorization?.toLowerCase().startsWith('bearer ')) ||
+      (typeof req.headers['x-api-key'] === 'string' && req.headers['x-api-key'].trim() !== '');
+    if (!hasHeaderKey && (user.username === 'shopping_admin' || user.role === 'admin')) {
+      throw new UnauthorizedError(
+        'The shopping_admin account does not use cookie authentication'
+      );
+    }
     req.user = user;
     next();
   } catch (err) {

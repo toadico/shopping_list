@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import type { DbInstance } from '../db/database.js';
-import { NotFoundError, ValidationError } from '../errors/AppError.js';
+import { ConflictError, NotFoundError, ValidationError } from '../errors/AppError.js';
 
 export interface StoreRecord {
   id: string;
@@ -73,4 +73,52 @@ export function findOrCreateStore(
 
   const created = db.prepare('SELECT * FROM stores WHERE id = ?').get(id) as StoreRecord;
   return { store: toStoreDTO(created), created: true };
+}
+
+export function updateStore(
+  db: DbInstance,
+  storeId: string,
+  rawName: string
+): StoreDTO {
+  const name = (rawName ?? '').trim();
+  if (name.length < 1 || name.length > 80) {
+    throw new ValidationError('Store name must be between 1 and 80 characters', [
+      { field: 'name', message: 'Store name must be between 1 and 80 characters' },
+    ]);
+  }
+
+  const existing = db
+    .prepare('SELECT * FROM stores WHERE id = ?')
+    .get(storeId) as StoreRecord | undefined;
+
+  if (!existing) {
+    throw new NotFoundError('Store');
+  }
+
+  const duplicate = db
+    .prepare('SELECT * FROM stores WHERE name = ? COLLATE NOCASE AND id != ?')
+    .get(name, storeId) as StoreRecord | undefined;
+
+  if (duplicate) {
+    throw new ConflictError(`A store named "${name}" already exists`);
+  }
+
+  const now = new Date().toISOString();
+  const tx = db.transaction(() => {
+    db.prepare('UPDATE stores SET name = ? WHERE id = ?').run(name, storeId);
+    db.prepare(
+      'UPDATE shopping_items SET store_name = ?, updated_at = ? WHERE store_id = ? OR store_name = ? COLLATE NOCASE'
+    ).run(name, now, storeId, existing.name);
+  });
+
+  tx();
+
+  return getStoreById(db, storeId);
+}
+
+export function deleteStore(db: DbInstance, storeId: string): void {
+  const result = db.prepare('DELETE FROM stores WHERE id = ?').run(storeId);
+  if (result.changes === 0) {
+    throw new NotFoundError('Store');
+  }
 }

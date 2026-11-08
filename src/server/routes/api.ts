@@ -22,7 +22,12 @@ import {
   revokeUserAccess,
   updateUserStatus,
 } from '../services/userService.js';
-import { findOrCreateStore, listStores } from '../services/storeService.js';
+import {
+  deleteStore,
+  findOrCreateStore,
+  listStores,
+  updateStore,
+} from '../services/storeService.js';
 import {
   createItem,
   deleteItem,
@@ -99,7 +104,7 @@ apiRouter.post('/auth/admin/login', (req: Request, res: Response, next: NextFunc
   try {
     const parsed = adminLoginSchema.parse(req.body);
     const result = loginAdmin(getDb(), parsed.username, parsed.password);
-    setAuthCookie(req, res, result.apiKey);
+    // shopping_admin does not receive a cookie with an API key
     res.status(200).json(result);
   } catch (err) {
     next(err);
@@ -108,7 +113,7 @@ apiRouter.post('/auth/admin/login', (req: Request, res: Response, next: NextFunc
 
 apiRouter.get('/auth/me', requireAuth, (req: Request, res: Response) => {
   const apiKey = extractApiKey(req);
-  if (apiKey) {
+  if (apiKey && req.user?.role !== 'admin' && req.user?.username !== 'shopping_admin') {
     setAuthCookie(req, res, apiKey);
   }
   res.status(200).json({ user: req.user });
@@ -127,7 +132,8 @@ apiRouter.post(
       const parsed = createInviteSchema.parse(req.body ?? {});
       const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'http';
       const host = req.headers['x-forwarded-host'] || req.get('host') || 'localhost:3000';
-      const baseUrl = parsed.baseUrl ?? `${protocol}://${host}`;
+      const configuredPublicBase = process.env.PUBLIC_BASE_URL?.trim();
+      const baseUrl = configuredPublicBase || parsed.baseUrl || `${protocol}://${host}`;
       const invite = await createInviteQr(getDb(), req.user!, baseUrl);
       res.status(201).json({ invite });
     } catch (err) {
@@ -267,6 +273,41 @@ apiRouter.post('/stores', requireAuth, requireShopper, (req: Request, res: Respo
       });
     }
     res.status(created ? 201 : 200).json({ store, created });
+  } catch (err) {
+    next(err);
+  }
+});
+
+apiRouter.patch('/stores/:id', requireAuth, requireShopper, (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const parsed = createStoreSchema.parse(req.body);
+    const db = getDb();
+    const store = updateStore(db, String(req.params.id), parsed.name);
+    const stores = listStores(db);
+    const items = listItems(db);
+    broadcastEvent({
+      type: 'items_updated',
+      stores,
+      items,
+      timestamp: new Date().toISOString(),
+    });
+    res.status(200).json({ store, stores, items });
+  } catch (err) {
+    next(err);
+  }
+});
+
+apiRouter.delete('/stores/:id', requireAuth, requireShopper, (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const db = getDb();
+    deleteStore(db, String(req.params.id));
+    const stores = listStores(db);
+    broadcastEvent({
+      type: 'stores_updated',
+      stores,
+      timestamp: new Date().toISOString(),
+    });
+    res.status(204).send();
   } catch (err) {
     next(err);
   }
