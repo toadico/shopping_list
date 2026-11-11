@@ -7,6 +7,9 @@ export interface ShoppingItem {
   storeName: string;
   imageData: string | null;
   checked: boolean;
+  checkedBy?: string | null;
+  checkedByName?: string | null;
+  checkedAt?: string | null;
   createdBy: string | null;
   createdByName: string;
   updatedAt: string;

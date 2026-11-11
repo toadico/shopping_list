@@ -278,6 +278,9 @@ describe('Unit Tests: Error Hierarchy & Domain Services', () => {
       // Update item to checked
       const checkedItem = updateItem(db, item.id, { checked: true }, shopperUser);
       expect(checkedItem.checked).toBe(true);
+      expect(checkedItem.checkedBy).toBe(shopperUser.id);
+      expect(checkedItem.checkedByName).toBe('Maya Shopper');
+      expect(checkedItem.checkedAt).toBeTruthy();
 
       // Batch offline sync mutations
       const syncResult = syncOfflineMutations(

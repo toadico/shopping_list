@@ -352,6 +352,8 @@ describe('Integration Tests: Express API Routes, Security & Probes', () => {
         .send({ checked: true, quantity: '8' });
       expect(patchRes.status).toBe(200);
       expect(patchRes.body.item.checked).toBe(true);
+      expect(patchRes.body.item.checkedByName).toBe('Elena Shopper');
+      expect(patchRes.body.item.checkedAt).toBeTruthy();
       expect(patchRes.body.item.quantity).toBe('8');
 
       // Filter items by storeName

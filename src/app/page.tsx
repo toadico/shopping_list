@@ -80,6 +80,18 @@ function parseItemQuantity(qty: string | number | undefined): number {
   return Number.isNaN(parsed) || parsed < 1 ? 1 : parsed;
 }
 
+function getDaysElapsed(isoDate: string | null | undefined): number {
+  if (!isoDate) return 0;
+  const timestamp = new Date(isoDate).getTime();
+  if (Number.isNaN(timestamp)) return 0;
+  const diffMs = Date.now() - timestamp;
+  return Math.max(0, Math.floor(diffMs / (1000 * 60 * 60 * 24)));
+}
+
+function formatDaysCount(days: number): string {
+  return `${days} ${days === 1 ? 'day' : 'days'}`;
+}
+
 export default function ShoppingListApp() {
   const [apiKey, setApiKey] = useState<string | null>(null);
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
@@ -798,6 +810,9 @@ export default function ShoppingListApp() {
         storeName: effectiveStoreName,
         imageData: payload.imageData,
         checked: false,
+        checkedBy: null,
+        checkedByName: null,
+        checkedAt: null,
         createdBy: currentUser?.id ?? null,
         createdByName: currentUser?.name ?? 'Me (Offline)',
         updatedAt: now,
@@ -890,8 +905,18 @@ export default function ShoppingListApp() {
 
   const handleToggleItemChecked = async (item: ShoppingItem) => {
     const nextChecked = !item.checked;
+    const now = new Date().toISOString();
     const optimistic = items.map((i) =>
-      i.id === item.id ? { ...i, checked: nextChecked, updatedAt: new Date().toISOString() } : i
+      i.id === item.id
+        ? {
+            ...i,
+            checked: nextChecked,
+            checkedBy: nextChecked ? (currentUser?.id ?? null) : null,
+            checkedByName: nextChecked ? (currentUser?.name ?? 'Me (Offline)') : null,
+            checkedAt: nextChecked ? now : null,
+            updatedAt: now,
+          }
+        : i
     );
     setItems(optimistic);
     await saveCachedItems(optimistic);
@@ -1333,7 +1358,13 @@ export default function ShoppingListApp() {
                             >
                               <span className="badge badge-store">🏬 {item.storeName}</span>
                               <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
-                                Added by {item.createdByName}
+                                {item.checked
+                                  ? `Gotten by ${item.checkedByName || item.createdByName} (${formatDaysCount(
+                                      getDaysElapsed(item.checkedAt || item.updatedAt)
+                                    )} ago)`
+                                  : `Added by ${item.createdByName} (${formatDaysCount(
+                                      getDaysElapsed(item.createdAt)
+                                    )} on list)`}
                               </span>
                             </div>
 

@@ -1,14 +1,13 @@
 # syntax=docker/dockerfile:1
-FROM node:22-bookworm-slim AS builder
+FROM node:22-alpine AS builder
 
 WORKDIR /app
 
 # Install build dependencies if native compilation is needed
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apk add --no-cache \
     python3 \
     make \
-    g++ \
-    && rm -rf /var/lib/apt/lists/*
+    g++
 
 COPY package.json package-lock.json* ./
 RUN npm ci
@@ -19,7 +18,7 @@ COPY src ./src
 
 RUN npm run build && npm prune --omit=dev
 
-FROM node:22-bookworm-slim AS runner
+FROM node:22-alpine AS runner
 
 WORKDIR /app
 

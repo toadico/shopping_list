@@ -21,6 +21,9 @@ export interface ShoppingItemRecord {
   store_name: string;
   image_data: string | null;
   checked: number;
+  checked_by: string | null;
+  checked_by_name: string | null;
+  checked_at: string | null;
   created_by: string | null;
   created_by_name: string;
   updated_at: string;
@@ -36,6 +39,9 @@ export interface ShoppingItemDTO {
   storeName: string;
   imageData: string | null;
   checked: boolean;
+  checkedBy: string | null;
+  checkedByName: string | null;
+  checkedAt: string | null;
   createdBy: string | null;
   createdByName: string;
   updatedAt: string;
@@ -83,6 +89,9 @@ export function toItemDTO(row: ShoppingItemRecord): ShoppingItemDTO {
     storeName: row.store_name,
     imageData: row.image_data,
     checked: row.checked === 1,
+    checkedBy: row.checked_by ?? null,
+    checkedByName: row.checked_by_name ?? null,
+    checkedAt: row.checked_at ?? null,
     createdBy: row.created_by,
     createdByName: row.created_by_name,
     updatedAt: row.updated_at,
@@ -197,12 +206,16 @@ export function createItem(
   const id = input.id && input.id.trim() !== '' ? input.id.trim() : crypto.randomUUID();
   const now = new Date().toISOString();
   const checked = input.checked ? 1 : 0;
+  const checkedBy = checked === 1 ? user.id : null;
+  const checkedByName = checked === 1 ? user.name : null;
+  const checkedAt = checked === 1 ? now : null;
 
   db.prepare(
     `INSERT INTO shopping_items (
       id, name, quantity, notes, store_id, store_name, image_data,
-      checked, created_by, created_by_name, updated_at, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      checked, checked_by, checked_by_name, checked_at,
+      created_by, created_by_name, updated_at, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       name = excluded.name,
       quantity = excluded.quantity,
@@ -211,6 +224,9 @@ export function createItem(
       store_name = excluded.store_name,
       image_data = COALESCE(excluded.image_data, shopping_items.image_data),
       checked = excluded.checked,
+      checked_by = CASE WHEN excluded.checked = 1 THEN COALESCE(excluded.checked_by, shopping_items.checked_by) ELSE NULL END,
+      checked_by_name = CASE WHEN excluded.checked = 1 THEN COALESCE(excluded.checked_by_name, shopping_items.checked_by_name) ELSE NULL END,
+      checked_at = CASE WHEN excluded.checked = 1 THEN COALESCE(excluded.checked_at, shopping_items.checked_at) ELSE NULL END,
       updated_at = excluded.updated_at`
   ).run(
     id,
@@ -221,6 +237,9 @@ export function createItem(
     storeName,
     validImage,
     checked,
+    checkedBy,
+    checkedByName,
+    checkedAt,
     user.id,
     user.name,
     now,
@@ -283,12 +302,44 @@ export function updateItem(
     input.checked !== undefined ? (input.checked ? 1 : 0) : existing.checked;
   const now = new Date().toISOString();
 
+  let checkedBy = existing.checked_by;
+  let checkedByName = existing.checked_by_name;
+  let checkedAt = existing.checked_at;
+
+  if (input.checked !== undefined) {
+    if (input.checked) {
+      if (existing.checked === 0 || !existing.checked_by_name) {
+        checkedBy = user.id;
+        checkedByName = user.name;
+        checkedAt = now;
+      }
+    } else {
+      checkedBy = null;
+      checkedByName = null;
+      checkedAt = null;
+    }
+  }
+
   db.prepare(
     `UPDATE shopping_items
      SET name = ?, quantity = ?, notes = ?, store_id = ?, store_name = ?,
-         image_data = ?, checked = ?, updated_at = ?
+         image_data = ?, checked = ?, checked_by = ?, checked_by_name = ?,
+         checked_at = ?, updated_at = ?
      WHERE id = ?`
-  ).run(name, quantity, notes, storeId, storeName, imageData, checked, now, itemId);
+  ).run(
+    name,
+    quantity,
+    notes,
+    storeId,
+    storeName,
+    imageData,
+    checked,
+    checkedBy,
+    checkedByName,
+    checkedAt,
+    now,
+    itemId
+  );
 
   return getItemById(db, itemId);
 }

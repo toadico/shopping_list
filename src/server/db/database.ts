@@ -79,6 +79,9 @@ export function initializeSchema(db: DbInstance): void {
       store_name TEXT NOT NULL DEFAULT 'General',
       image_data TEXT,
       checked INTEGER NOT NULL DEFAULT 0,
+      checked_by TEXT,
+      checked_by_name TEXT,
+      checked_at TEXT,
       created_by TEXT,
       created_by_name TEXT NOT NULL DEFAULT 'User',
       updated_at TEXT NOT NULL,
@@ -111,6 +114,30 @@ export function initializeSchema(db: DbInstance): void {
       UPDATE invite_tokens
       SET grants_manage_users = 1
       WHERE created_by IN (SELECT id FROM users WHERE username = 'shopping_admin')
+    `);
+  }
+
+  const itemColumns = db
+    .prepare('PRAGMA table_info(shopping_items)')
+    .all() as Array<{ name: string }>;
+  if (!itemColumns.some((col) => col.name === 'checked_by')) {
+    db.exec('ALTER TABLE shopping_items ADD COLUMN checked_by TEXT');
+  }
+  if (!itemColumns.some((col) => col.name === 'checked_by_name')) {
+    db.exec('ALTER TABLE shopping_items ADD COLUMN checked_by_name TEXT');
+    db.exec(`
+      UPDATE shopping_items
+      SET checked_by = created_by,
+          checked_by_name = created_by_name
+      WHERE checked = 1 AND checked_by_name IS NULL
+    `);
+  }
+  if (!itemColumns.some((col) => col.name === 'checked_at')) {
+    db.exec('ALTER TABLE shopping_items ADD COLUMN checked_at TEXT');
+    db.exec(`
+      UPDATE shopping_items
+      SET checked_at = updated_at
+      WHERE checked = 1 AND checked_at IS NULL
     `);
   }
 
