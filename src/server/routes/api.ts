@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { Router, type Request, type Response, type NextFunction } from 'express';
+import express, { Router, type Request, type Response, type NextFunction } from 'express';
 import { z } from 'zod';
 import { getDb } from '../db/database.js';
 import {
@@ -10,6 +10,7 @@ import {
   requireShopper,
   setAuthCookie,
 } from '../middleware/auth.js';
+import { sanitizeMiddleware } from '../middleware/sanitize.js';
 import {
   createInviteQr,
   loginAdmin,
@@ -43,6 +44,20 @@ import {
 } from '../services/eventHub.js';
 
 export const apiRouter = Router();
+
+// Small body parser (16 KB) for auth, store, and user management routes
+const parseSmallBody = [
+  express.json({ limit: '16kb' }),
+  express.urlencoded({ extended: true, limit: '16kb' }),
+  sanitizeMiddleware,
+];
+
+// Large body parser (10 MB) strictly for authenticated shopper item routes (camera photos)
+const parseLargeItemBody = [
+  express.json({ limit: '10mb' }),
+  express.urlencoded({ extended: true, limit: '10mb' }),
+  sanitizeMiddleware,
+];
 
 const adminLoginSchema = z.object({
   username: z.string().min(1, 'Username is required'),
@@ -100,16 +115,20 @@ const syncMutationsSchema = z.object({
 
 // --- Auth & Onboarding Routes ---
 
-apiRouter.post('/auth/admin/login', (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const parsed = adminLoginSchema.parse(req.body);
-    const result = loginAdmin(getDb(), parsed.username, parsed.password);
-    // shopping_admin does not receive a cookie with an API key
-    res.status(200).json(result);
-  } catch (err) {
-    next(err);
+apiRouter.post(
+  '/auth/admin/login',
+  ...parseSmallBody,
+  (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const parsed = adminLoginSchema.parse(req.body);
+      const result = loginAdmin(getDb(), parsed.username, parsed.password);
+      // shopping_admin does not receive a cookie with an API key
+      res.status(200).json(result);
+    } catch (err) {
+      next(err);
+    }
   }
-});
+);
 
 apiRouter.get('/auth/me', requireAuth, (req: Request, res: Response) => {
   const apiKey = extractApiKey(req);
@@ -127,6 +146,7 @@ apiRouter.post('/auth/logout', (_req: Request, res: Response) => {
 apiRouter.post(
   '/auth/invites',
   requireAuth,
+  ...parseSmallBody,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const parsed = createInviteSchema.parse(req.body ?? {});
@@ -151,7 +171,7 @@ apiRouter.get('/auth/invites/:token', (req: Request, res: Response, next: NextFu
   }
 });
 
-apiRouter.post('/auth/join', (req: Request, res: Response, next: NextFunction) => {
+apiRouter.post('/auth/join', ...parseSmallBody, (req: Request, res: Response, next: NextFunction) => {
   try {
     const parsed = joinSchema.parse(req.body);
     const result = redeemInviteToken(getDb(), parsed.token, parsed.name);
@@ -177,6 +197,7 @@ apiRouter.patch(
   '/users/:id/status',
   requireAuth,
   requireAdmin,
+  ...parseSmallBody,
   (req: Request, res: Response, next: NextFunction) => {
     try {
       const parsed = userStatusSchema.parse(req.body);
@@ -260,42 +281,54 @@ apiRouter.get('/stores', requireAuth, requireShopper, (_req: Request, res: Respo
   }
 });
 
-apiRouter.post('/stores', requireAuth, requireShopper, (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const parsed = createStoreSchema.parse(req.body);
-    const db = getDb();
-    const { store, created } = findOrCreateStore(db, parsed.name, req.user!.id);
-    if (created) {
+apiRouter.post(
+  '/stores',
+  requireAuth,
+  requireShopper,
+  ...parseSmallBody,
+  (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const parsed = createStoreSchema.parse(req.body);
+      const db = getDb();
+      const { store, created } = findOrCreateStore(db, parsed.name, req.user!.id);
+      if (created) {
+        broadcastEvent({
+          type: 'stores_updated',
+          stores: listStores(db),
+          timestamp: new Date().toISOString(),
+        });
+      }
+      res.status(created ? 201 : 200).json({ store, created });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+apiRouter.patch(
+  '/stores/:id',
+  requireAuth,
+  requireShopper,
+  ...parseSmallBody,
+  (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const parsed = createStoreSchema.parse(req.body);
+      const db = getDb();
+      const store = updateStore(db, String(req.params.id), parsed.name);
+      const stores = listStores(db);
+      const items = listItems(db);
       broadcastEvent({
-        type: 'stores_updated',
-        stores: listStores(db),
+        type: 'items_updated',
+        stores,
+        items,
         timestamp: new Date().toISOString(),
       });
+      res.status(200).json({ store, stores, items });
+    } catch (err) {
+      next(err);
     }
-    res.status(created ? 201 : 200).json({ store, created });
-  } catch (err) {
-    next(err);
   }
-});
-
-apiRouter.patch('/stores/:id', requireAuth, requireShopper, (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const parsed = createStoreSchema.parse(req.body);
-    const db = getDb();
-    const store = updateStore(db, String(req.params.id), parsed.name);
-    const stores = listStores(db);
-    const items = listItems(db);
-    broadcastEvent({
-      type: 'items_updated',
-      stores,
-      items,
-      timestamp: new Date().toISOString(),
-    });
-    res.status(200).json({ store, stores, items });
-  } catch (err) {
-    next(err);
-  }
-});
+);
 
 apiRouter.delete('/stores/:id', requireAuth, requireShopper, (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -329,39 +362,51 @@ apiRouter.get('/items', requireAuth, requireShopper, (req: Request, res: Respons
   }
 });
 
-apiRouter.post('/items', requireAuth, requireShopper, (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const parsed = createItemSchema.parse(req.body);
-    const db = getDb();
-    const item = createItem(db, parsed, req.user!);
-    broadcastEvent({
-      type: 'items_updated',
-      items: listItems(db),
-      stores: listStores(db),
-      timestamp: new Date().toISOString(),
-    });
-    res.status(201).json({ item });
-  } catch (err) {
-    next(err);
+apiRouter.post(
+  '/items',
+  requireAuth,
+  requireShopper,
+  ...parseLargeItemBody,
+  (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const parsed = createItemSchema.parse(req.body);
+      const db = getDb();
+      const item = createItem(db, parsed, req.user!);
+      broadcastEvent({
+        type: 'items_updated',
+        items: listItems(db),
+        stores: listStores(db),
+        timestamp: new Date().toISOString(),
+      });
+      res.status(201).json({ item });
+    } catch (err) {
+      next(err);
+    }
   }
-});
+);
 
-apiRouter.patch('/items/:id', requireAuth, requireShopper, (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const parsed = updateItemSchema.parse(req.body);
-    const db = getDb();
-    const item = updateItem(db, String(req.params.id), parsed, req.user!);
-    broadcastEvent({
-      type: 'items_updated',
-      items: listItems(db),
-      stores: listStores(db),
-      timestamp: new Date().toISOString(),
-    });
-    res.status(200).json({ item });
-  } catch (err) {
-    next(err);
+apiRouter.patch(
+  '/items/:id',
+  requireAuth,
+  requireShopper,
+  ...parseLargeItemBody,
+  (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const parsed = updateItemSchema.parse(req.body);
+      const db = getDb();
+      const item = updateItem(db, String(req.params.id), parsed, req.user!);
+      broadcastEvent({
+        type: 'items_updated',
+        items: listItems(db),
+        stores: listStores(db),
+        timestamp: new Date().toISOString(),
+      });
+      res.status(200).json({ item });
+    } catch (err) {
+      next(err);
+    }
   }
-});
+);
 
 apiRouter.delete('/items/:id', requireAuth, requireShopper, (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -379,23 +424,29 @@ apiRouter.delete('/items/:id', requireAuth, requireShopper, (req: Request, res: 
   }
 });
 
-apiRouter.post('/items/sync', requireAuth, requireShopper, (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const parsed = syncMutationsSchema.parse(req.body);
-    const db = getDb();
-    const result = syncOfflineMutations(
-      db,
-      parsed.mutations as Parameters<typeof syncOfflineMutations>[1],
-      req.user!
-    );
-    broadcastEvent({
-      type: 'items_updated',
-      items: result.items,
-      stores: listStores(db),
-      timestamp: new Date().toISOString(),
-    });
-    res.status(200).json(result);
-  } catch (err) {
-    next(err);
+apiRouter.post(
+  '/items/sync',
+  requireAuth,
+  requireShopper,
+  ...parseLargeItemBody,
+  (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const parsed = syncMutationsSchema.parse(req.body);
+      const db = getDb();
+      const result = syncOfflineMutations(
+        db,
+        parsed.mutations as Parameters<typeof syncOfflineMutations>[1],
+        req.user!
+      );
+      broadcastEvent({
+        type: 'items_updated',
+        items: result.items,
+        stores: listStores(db),
+        timestamp: new Date().toISOString(),
+      });
+      res.status(200).json(result);
+    } catch (err) {
+      next(err);
+    }
   }
-});
+);

@@ -107,6 +107,7 @@ interface AdminConsolePasswordState {
   failedAttempts: number;
   expired: boolean;
   expiredReason: string | null;
+  apiKeyExpired: boolean;
   expiryTimer: ReturnType<typeof setTimeout> | null;
 }
 
@@ -128,31 +129,42 @@ export function printAdminPasswordBanner(password: string, expiresAtIso?: string
       `  Initial Admin Password : ${password}\n` +
       `  Password Policy        : 1 correct use | max 3 failed attempts | 30m TTL\n` +
       `  Password Expires At    : ${expiryDisplay}\n` +
+      `  API Key Expires At     : ${expiryDisplay} (30m after startup)\n` +
       `${border}\n\n`
   );
 }
 
 export function printAdminPasswordExpiredNotice(reason: string): void {
   const border = '='.repeat(68);
+  const apiKeyNote =
+    reason === '30-minute container startup timeout'
+      ? 'The shopping_admin API key has also expired (30m startup limit).'
+      : 'The shopping_admin API key remains active until 30m after startup.';
   process.stdout.write(
     `\n${border}\n` +
       `  SHARED SHOPPING LIST — shopping_admin CONSOLE PASSWORD EXPIRED\n` +
       `${border}\n` +
       `  Status     : EXPIRED (${reason})\n` +
       `  Expired At : ${new Date().toISOString()}\n` +
-      `  Note       : The shopping_admin API key remains active.\n` +
+      `  Note       : ${apiKeyNote}\n` +
       `               Restart the container if you need a new console password.\n` +
       `${border}\n\n`
   );
 }
 
 export function expireAdminConsolePassword(reason: string): void {
-  if (!adminPasswordState || adminPasswordState.expired) {
+  if (!adminPasswordState) {
     return;
   }
-  if (adminPasswordState.expiryTimer) {
-    clearTimeout(adminPasswordState.expiryTimer);
-    adminPasswordState.expiryTimer = null;
+  if (reason === '30-minute container startup timeout') {
+    if (adminPasswordState.expiryTimer) {
+      clearTimeout(adminPasswordState.expiryTimer);
+      adminPasswordState.expiryTimer = null;
+    }
+    adminPasswordState.apiKeyExpired = true;
+  }
+  if (adminPasswordState.expired) {
+    return;
   }
   adminPasswordState.expired = true;
   adminPasswordState.expiredReason = reason;
@@ -166,6 +178,7 @@ export function expireAdminConsolePassword(reason: string): void {
  * - 1 correct use
  * - 3 incorrect attempts
  * - 30 minutes after container startup
+ * Also enforces that the shopping_admin API key expires 30 minutes after container startup.
  */
 export function bootstrapAdminAccount(
   db: DbInstance,
@@ -199,6 +212,7 @@ export function bootstrapAdminAccount(
     failedAttempts: 0,
     expired: false,
     expiredReason: null,
+    apiKeyExpired: false,
     expiryTimer,
   };
 
@@ -326,6 +340,21 @@ export function authenticateByApiKey(db: DbInstance, rawApiKey?: string): Public
 
   if (!user) {
     throw new UnauthorizedError('Invalid or unrecognized API key');
+  }
+
+  if (user.username === 'shopping_admin' || user.role === 'admin') {
+    if (
+      !adminPasswordState ||
+      adminPasswordState.apiKeyExpired ||
+      Date.now() >= adminPasswordState.expiresAt
+    ) {
+      if (adminPasswordState && !adminPasswordState.apiKeyExpired) {
+        adminPasswordState.apiKeyExpired = true;
+      }
+      throw new UnauthorizedError(
+        'The shopping_admin API key has expired (30-minute container startup timeout). Restart the container to generate new credentials.'
+      );
+    }
   }
 
   if (user.status === 'disabled') {

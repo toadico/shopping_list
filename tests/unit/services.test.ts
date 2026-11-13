@@ -134,21 +134,24 @@ describe('Unit Tests: Error Hierarchy & Domain Services', () => {
       }
     });
 
-    it('expires the shopping_admin password after the startup timeout and logs to console', async () => {
+    it('expires the shopping_admin password and API key after the startup timeout and logs to console', async () => {
       const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
       try {
-        // Use a short 25ms TTL to verify startup timeout expiration
-        const boot = bootstrapAdminAccount(db, 25);
+        // Use a short 40ms TTL to verify startup timeout expiration for both password and API key
+        const boot = bootstrapAdminAccount(db, 40);
         printAdminPasswordBanner(boot.password, boot.expiresAt);
         expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('shopping_admin'));
         expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining(boot.password));
 
-        await new Promise((resolve) => setTimeout(resolve, 50));
+        const loginResult = loginAdmin(db, 'shopping_admin', boot.password);
+        expect(authenticateByApiKey(db, loginResult.apiKey).username).toBe('shopping_admin');
 
-        expect(stdoutSpy).toHaveBeenCalledWith(
-          expect.stringContaining('EXPIRED (30-minute container startup timeout)')
-        );
+        await new Promise((resolve) => setTimeout(resolve, 60));
+
         expect(() => loginAdmin(db, 'shopping_admin', boot.password)).toThrow(/expired/i);
+        expect(() => authenticateByApiKey(db, loginResult.apiKey)).toThrow(
+          /shopping_admin API key has expired/i
+        );
       } finally {
         stdoutSpy.mockRestore();
       }

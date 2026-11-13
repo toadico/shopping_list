@@ -25,10 +25,12 @@ An open-source, self-hosted collaborative shopping list built with **Node.js (LT
 
 ---
 
-## Quick Start with Docker Compose (No `.env` File Required)
+## Quick Start with Docker Compose
+
+`PUBLIC_BASE_URL` is required to start the container:
 
 ```bash
-docker compose up --build -d
+PUBLIC_BASE_URL=http://localhost:3000 docker compose up --build -d
 ```
 
 View the container console logs to get the `shopping_admin` password:

@@ -4,7 +4,7 @@ import next from 'next';
 import { closeDb, getDb } from './db/database.js';
 import { bootstrapAdminAccount, printAdminPasswordBanner } from './services/authService.js';
 import { closeAllSseClients } from './services/eventHub.js';
-import { createApp } from './app.js';
+import { createApp, validateRequiredPublicBaseUrl } from './app.js';
 
 const PORT = Number(process.env.PORT ?? 3000);
 const HOST = process.env.HOST ?? '0.0.0.0';
@@ -13,6 +13,9 @@ const dev = process.env.NODE_ENV !== 'production';
 let shuttingDown = false;
 
 export async function startServer(): Promise<http.Server> {
+  // 0. Require a valid PUBLIC_BASE_URL on startup
+  const publicBaseUrl = validateRequiredPublicBaseUrl(process.env.PUBLIC_BASE_URL);
+
   // 1. Initialize SQLite database & bootstrap shopping_admin
   const db = getDb();
   const { password, expiresAt } = bootstrapAdminAccount(db);
@@ -33,6 +36,7 @@ export async function startServer(): Promise<http.Server> {
   // 4. Create Express app with Next.js handler and shutdown state
   const app = createApp({
     enableRateLimit: true,
+    publicBaseUrl: publicBaseUrl.origin,
     isShuttingDown: () => shuttingDown,
     nextHandler: (req, res) => handle(req, res),
   });

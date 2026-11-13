@@ -3,7 +3,7 @@ import request from 'supertest';
 import type { Express } from 'express';
 import { createDatabase, setDb, closeDb, type DbInstance } from '../../src/server/db/database.js';
 import { bootstrapAdminAccount } from '../../src/server/services/authService.js';
-import { createApp } from '../../src/server/app.js';
+import { createApp, validateRequiredPublicBaseUrl } from '../../src/server/app.js';
 
 describe('Integration Tests: Express API Routes, Security & Probes', () => {
   let db: DbInstance;
@@ -37,14 +37,26 @@ describe('Integration Tests: Express API Routes, Security & Probes', () => {
       expect(healthRes.status).toBe(200);
       expect(healthRes.body.status).toBe('ok');
       expect(healthRes.headers['x-content-type-options']).toBe('nosniff');
-      expect(healthRes.headers['content-security-policy']).not.toContain('upgrade-insecure-requests');
+      const csp = String(healthRes.headers['content-security-policy']);
+      expect(csp).not.toContain('upgrade-insecure-requests');
+      expect(csp).not.toContain("'unsafe-inline'");
+      expect(csp).not.toContain("'unsafe-eval'");
+      expect(csp).toMatch(/script-src 'self' 'nonce-[A-Za-z0-9+/=]+'/);
+      expect(csp).toContain("style-src 'self'");
 
       const readyRes = await request(app).get('/ready');
       expect(readyRes.status).toBe(200);
       expect(readyRes.body.status).toBe('ready');
     });
 
-    it('enforces PUBLIC_BASE_URL host and origin restrictions when configured', async () => {
+    it('requires a valid PUBLIC_BASE_URL at startup and enforces host/origin restrictions', async () => {
+      expect(() => validateRequiredPublicBaseUrl('')).toThrow(/PUBLIC_BASE_URL environment variable is required/);
+      expect(() => validateRequiredPublicBaseUrl('not-a-valid-url')).toThrow(/Invalid PUBLIC_BASE_URL/);
+      expect(() => validateRequiredPublicBaseUrl('ftp://shopping.example.com')).toThrow(/Invalid PUBLIC_BASE_URL/);
+      expect(validateRequiredPublicBaseUrl('https://shopping.example.com').origin).toBe(
+        'https://shopping.example.com'
+      );
+
       const restrictedApp = createApp({
         enableRateLimit: false,
         publicBaseUrl: 'https://shopping.example.com',
@@ -82,10 +94,25 @@ describe('Integration Tests: Express API Routes, Security & Probes', () => {
   });
 
   describe('Authentication & QR Code Onboarding Flow', () => {
-    it('rejects unauthenticated requests to protected routes with 401', async () => {
+    it('rejects unauthenticated requests to protected routes with 401 before parsing request bodies, and enforces a 16kb limit on public auth routes', async () => {
       const res = await request(app).get('/api/items');
       expect(res.status).toBe(401);
       expect(res.body.error.code).toBe('UNAUTHORIZED');
+
+      // Malformed JSON sent to a protected route without auth is rejected with 401 (not 400 INVALID_JSON) because requireAuth runs before body parsing
+      const unauthPostRes = await request(app)
+        .post('/api/items')
+        .set('Content-Type', 'application/json')
+        .send('{"unterminated_json": ');
+      expect(unauthPostRes.status).toBe(401);
+      expect(unauthPostRes.body.error.code).toBe('UNAUTHORIZED');
+
+      // Public login endpoint rejects payloads exceeding 16 KB with 413 PAYLOAD_TOO_LARGE
+      const oversizedLoginRes = await request(app)
+        .post('/api/auth/admin/login')
+        .send({ username: 'shopping_admin', password: 'x'.repeat(25_000) });
+      expect(oversizedLoginRes.status).toBe(413);
+      expect(oversizedLoginRes.body.error.code).toBe('PAYLOAD_TOO_LARGE');
     });
 
     it('rejects non-admin username login attempts, expires password after 1 correct use, and expires after 3 wrong attempts', async () => {

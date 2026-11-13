@@ -418,3 +418,238 @@ th {
   border: 1px solid rgba(16, 185, 129, 0.4);
   color: #6ee7b7;
 }
+
+.loading-card {
+  text-align: center;
+  padding: 3rem;
+}
+
+.auth-container {
+  max-width: 520px;
+  margin-top: 2.5rem;
+}
+
+.brand-title-spaced {
+  margin-bottom: 0.5rem;
+}
+
+.auth-subtitle {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  margin-bottom: 1.25rem;
+}
+
+.login-tabs {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1.25rem;
+}
+
+.btn-full {
+  width: 100%;
+}
+
+.btn-spaced-bottom {
+  margin-bottom: 1rem;
+}
+
+.btn-no-shrink {
+  flex-shrink: 0;
+}
+
+.btn-flex-1 {
+  flex: 1;
+}
+
+.api-key-banner-title {
+  font-weight: 700;
+  margin-bottom: 0.35rem;
+}
+
+.api-key-code {
+  display: block;
+  padding: 0.5rem;
+  background: #064e3b;
+  border-radius: 6px;
+  word-break: break-all;
+  margin-bottom: 0.5rem;
+}
+
+.store-chips-filter {
+  margin-bottom: 1rem;
+}
+
+.empty-list-message {
+  color: var(--text-secondary);
+  text-align: center;
+  padding: 2rem 0;
+}
+
+.item-row.checked .item-name-row,
+.item-name-row.checked {
+  text-decoration: line-through;
+}
+
+.item-details {
+  min-width: 0;
+  flex: 1;
+}
+
+.item-meta-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.item-meta-text {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
+.item-notes-text {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  margin-top: 0.25rem;
+}
+
+.manage-stores-trigger {
+  margin-top: 0.65rem;
+}
+
+.form-grid-end {
+  align-items: end;
+}
+
+.picture-btn-group {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.hidden-input {
+  display: none;
+}
+
+.attached-preview-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 0.25rem;
+  padding: 0.5rem;
+  background: var(--bg-primary);
+  border-radius: 8px;
+}
+
+.attached-preview-text {
+  flex: 1;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.footer-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.text-secondary {
+  color: var(--text-secondary);
+}
+
+.user-row-actions {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.primary-admin-label {
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+}
+
+.store-add-form {
+  margin-bottom: 1.25rem;
+}
+
+.store-add-input-row {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.35rem;
+}
+
+.store-list-heading {
+  margin-bottom: 0.5rem;
+}
+
+.store-modal-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.store-modal-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.55rem 0.75rem;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.store-edit-form {
+  display: flex;
+  gap: 0.4rem;
+  width: 100%;
+  align-items: center;
+}
+
+.input-compact {
+  padding: 0.4rem 0.65rem;
+  font-size: 0.9rem;
+}
+
+.store-modal-name {
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.camera-video {
+  width: 100%;
+  border-radius: 8px;
+  background: #000;
+  margin-bottom: 1rem;
+}
+
+.camera-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.modal-content-centered {
+  text-align: center;
+}
+
+.invite-modal-description {
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  margin-bottom: 1rem;
+}
+
+.qr-code-frame {
+  background: #ffffff;
+  padding: 1rem;
+  border-radius: 12px;
+  display: inline-block;
+  margin-bottom: 1rem;
+}
+
+.preview-lightbox-img {
+  width: 100%;
+  border-radius: 8px;
+}

@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import express, { type Express, type Request, type Response, type NextFunction } from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
@@ -21,10 +22,30 @@ function parseConfiguredPublicUrl(rawUrl?: string): URL | null {
     return null;
   }
   try {
-    return new URL(candidate);
+    const parsed = new URL(candidate);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return null;
+    }
+    return parsed;
   } catch {
     return null;
   }
+}
+
+export function validateRequiredPublicBaseUrl(rawUrl?: string): URL {
+  const candidate = (rawUrl ?? process.env.PUBLIC_BASE_URL ?? '').trim();
+  if (!candidate) {
+    throw new Error(
+      'PUBLIC_BASE_URL environment variable is required to start the server (e.g., https://shopping.example.com or http://localhost:3000).'
+    );
+  }
+  const parsed = parseConfiguredPublicUrl(candidate);
+  if (!parsed) {
+    throw new Error(
+      `Invalid PUBLIC_BASE_URL "${candidate}": must be a valid http:// or https:// URL.`
+    );
+  }
+  return parsed;
 }
 
 export function createApp(options: AppOptions = {}): Express {
@@ -36,14 +57,25 @@ export function createApp(options: AppOptions = {}): Express {
   const allowedOrigin = allowedPublicUrl ? allowedPublicUrl.origin : null;
   const cspSources = allowedOrigin ? ["'self'", allowedOrigin] : ["'self'"];
 
-  // Security headers with Helmet (configured to support self-hosted HTTP & HTTPS)
+  // Generate a cryptographic CSP nonce per request for Next.js inline scripts
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    const nonce = crypto.randomBytes(16).toString('base64');
+    res.locals.cspNonce = nonce;
+    req.headers['x-nonce'] = nonce;
+    next();
+  });
+
+  // Security headers with Helmet (configured to support self-hosted HTTP & HTTPS without unsafe-inline / unsafe-eval)
   app.use(
     helmet({
       contentSecurityPolicy: {
         directives: {
           defaultSrc: cspSources,
-          scriptSrc: [...cspSources, "'unsafe-inline'", "'unsafe-eval'"],
-          styleSrc: [...cspSources, "'unsafe-inline'"],
+          scriptSrc: [
+            ...cspSources,
+            (_req, res) => `'nonce-${String((res as Response).locals.cspNonce)}'`,
+          ],
+          styleSrc: cspSources,
           imgSrc: [...cspSources, 'data:', 'blob:'],
           connectSrc: cspSources,
           mediaSrc: [...cspSources, 'blob:', 'mediastream:'],
@@ -57,6 +89,15 @@ export function createApp(options: AppOptions = {}): Express {
       strictTransportSecurity: false,
     })
   );
+
+  // Forward the generated Content-Security-Policy header onto req.headers so Next.js SSR attaches the nonce to inline scripts
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    const cspHeader = res.getHeader('Content-Security-Policy');
+    if (typeof cspHeader === 'string') {
+      req.headers['content-security-policy'] = cspHeader;
+    }
+    next();
+  });
 
   // Standard CORS policy restricted to PUBLIC_BASE_URL when configured
   app.use(
@@ -170,9 +211,7 @@ export function createApp(options: AppOptions = {}): Express {
     app.use('/api', limiter);
   }
 
-  // Body parsing & input sanitization for API routes
-  app.use('/api', express.json({ limit: '10mb' }));
-  app.use('/api', express.urlencoded({ extended: true, limit: '10mb' }));
+  // Sanitize query/params before routing; request bodies are parsed per-route AFTER authentication
   app.use('/api', sanitizeMiddleware);
 
   // Mount API routes

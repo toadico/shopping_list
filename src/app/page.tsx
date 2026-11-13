@@ -1068,7 +1068,7 @@ export default function ShoppingListApp() {
   if (authLoading) {
     return (
       <div className="app-container">
-        <div className="card" style={{ textAlign: 'center', padding: '3rem' }}>
+        <div className="card loading-card">
           Loading Shared Shopping List...
         </div>
       </div>
@@ -1078,18 +1078,18 @@ export default function ShoppingListApp() {
   // --- Unauthenticated Screen: Admin Login, API Key Login, or QR Code Invite Redemption ---
   if (!currentUser) {
     return (
-      <div className="app-container" style={{ maxWidth: 520, marginTop: '2.5rem' }}>
+      <div className="app-container auth-container">
         <div className="card">
-          <div className="brand-title" style={{ marginBottom: '0.5rem' }}>
+          <div className="brand-title brand-title-spaced">
             <span>🛒 Shared Shopping List</span>
           </div>
-          <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '1.25rem' }}>
+          <p className="auth-subtitle">
             Private self-hosted shopping list. Access is restricted to authorized system users.
           </p>
 
           {errorMsg && <div className="alert alert-error">{errorMsg}</div>}
 
-          <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.25rem' }}>
+          <div className="login-tabs">
             <button
               type="button"
               className={`btn btn-sm ${loginTab === 'admin' ? 'btn-primary' : 'btn-secondary'}`}
@@ -1142,7 +1142,7 @@ export default function ShoppingListApp() {
                   required
                 />
               </div>
-              <button type="submit" className="btn btn-primary" style={{ width: '100%' }}>
+              <button type="submit" className="btn btn-primary btn-full">
                 Sign in as shopping_admin
               </button>
             </form>
@@ -1164,7 +1164,7 @@ export default function ShoppingListApp() {
                   required
                 />
               </div>
-              <button type="submit" className="btn btn-primary" style={{ width: '100%' }}>
+              <button type="submit" className="btn btn-primary btn-full">
                 Access Shopping List
               </button>
             </form>
@@ -1206,7 +1206,7 @@ export default function ShoppingListApp() {
                   required
                 />
               </div>
-              <button type="submit" className="btn btn-primary" style={{ width: '100%' }}>
+              <button type="submit" className="btn btn-primary btn-full">
                 Create Account & Generate API Key
               </button>
             </form>
@@ -1225,20 +1225,11 @@ export default function ShoppingListApp() {
       {/* Newly created API Key banner for QR-onboarded users */}
       {newlyIssuedApiKey && (
         <div className="alert alert-success">
-          <div style={{ fontWeight: 700, marginBottom: '0.35rem' }}>
+          <div className="api-key-banner-title">
             Welcome, {currentUser.name}! Your non-expiring personal API key has been generated and
             saved on this device:
           </div>
-          <code
-            style={{
-              display: 'block',
-              padding: '0.5rem',
-              background: '#064e3b',
-              borderRadius: 6,
-              wordBreak: 'break-all',
-              marginBottom: '0.5rem',
-            }}
-          >
+          <code className="api-key-code">
             {newlyIssuedApiKey}
           </code>
           <button
@@ -1270,7 +1261,7 @@ export default function ShoppingListApp() {
             </div>
 
             {/* Store Filter Bar */}
-            <div className="store-chips" style={{ marginBottom: '1rem' }}>
+            <div className="store-chips store-chips-filter">
               <button
                 type="button"
                 className={`store-chip ${filterStore === 'ALL' ? 'active' : ''}`}
@@ -1306,7 +1297,7 @@ export default function ShoppingListApp() {
             </div>
 
             {filteredItems.length === 0 ? (
-              <p style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: '2rem 0' }}>
+              <p className="empty-list-message">
                 No shopping list items yet. Add your first item below!
               </p>
             ) : (
@@ -1318,12 +1309,7 @@ export default function ShoppingListApp() {
                       key={item.id}
                       className={`item-row ${item.checked ? 'checked' : ''}`}
                     >
-                      <div
-                        className="item-name-row"
-                        style={{
-                          textDecoration: item.checked ? 'line-through' : 'none',
-                        }}
-                      >
+                      <div className={`item-name-row ${item.checked ? 'checked' : ''}`}>
                         {item.name}
                       </div>
 
@@ -1347,17 +1333,10 @@ export default function ShoppingListApp() {
                             />
                           )}
 
-                          <div style={{ minWidth: 0, flex: 1 }}>
-                            <div
-                              style={{
-                                display: 'flex',
-                                gap: '0.5rem',
-                                alignItems: 'center',
-                                flexWrap: 'wrap',
-                              }}
-                            >
+                          <div className="item-details">
+                            <div className="item-meta-row">
                               <span className="badge badge-store">🏬 {item.storeName}</span>
-                              <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                              <span className="item-meta-text">
                                 {item.checked
                                   ? `Gotten by ${item.checkedByName || item.createdByName} (${formatDaysCount(
                                       getDaysElapsed(item.checkedAt || item.updatedAt)
@@ -1369,13 +1348,7 @@ export default function ShoppingListApp() {
                             </div>
 
                             {item.notes && (
-                              <div
-                                style={{
-                                  fontSize: '0.85rem',
-                                  color: 'var(--text-secondary)',
-                                  marginTop: '0.25rem',
-                                }}
-                              >
+                              <div className="item-notes-text">
                                 📝 {item.notes}
                               </div>
                             )}
@@ -1499,9 +1472,8 @@ export default function ShoppingListApp() {
 
               <button
                 type="submit"
-                className="btn btn-primary"
+                className="btn btn-primary btn-full btn-spaced-bottom"
                 disabled={submittingItem}
-                style={{ width: '100%', marginBottom: '1rem' }}
               >
                 {submittingItem ? 'Adding Item...' : 'Add Item to Shopping List'}
               </button>
@@ -1533,7 +1505,7 @@ export default function ShoppingListApp() {
                   ))}
                 </div>
 
-                <div style={{ marginTop: '0.65rem' }}>
+                <div className="manage-stores-trigger">
                   <button
                     type="button"
                     className="btn btn-secondary btn-sm"
@@ -1553,7 +1525,7 @@ export default function ShoppingListApp() {
               </div>
 
               {/* Notes & Picture Attachment */}
-              <div className="form-grid" style={{ alignItems: 'end' }}>
+              <div className="form-grid form-grid-end">
                 <div className="form-group">
                   <label className="form-label" htmlFor="item-notes">
                     Notes (Optional)
@@ -1570,7 +1542,7 @@ export default function ShoppingListApp() {
 
                 <div className="form-group">
                   <label className="form-label">Attach Picture (Camera or Photo)</label>
-                  <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                  <div className="picture-btn-group">
                     <button
                       type="button"
                       className="btn btn-secondary"
@@ -1590,7 +1562,7 @@ export default function ShoppingListApp() {
                       type="file"
                       accept="image/*"
                       capture="environment"
-                      style={{ display: 'none' }}
+                      className="hidden-input"
                       onChange={handleFileInputChange}
                     />
                   </div>
@@ -1598,23 +1570,13 @@ export default function ShoppingListApp() {
               </div>
 
               {attachedImage && (
-                <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '0.75rem',
-                    marginTop: '0.25rem',
-                    padding: '0.5rem',
-                    background: 'var(--bg-primary)',
-                    borderRadius: 8,
-                  }}
-                >
+                <div className="attached-preview-bar">
                   <img
                     src={attachedImage}
                     alt="Attached preview"
                     className="item-thumb"
                   />
-                  <div style={{ flex: 1, fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                  <div className="attached-preview-text">
                     Picture attached and ready to save with this item.
                   </div>
                   <button
@@ -1645,7 +1607,7 @@ export default function ShoppingListApp() {
           )}
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+        <div className="footer-actions">
           <span className="badge badge-role">
             {currentUser.name} (
             {currentUser.role === 'admin'
@@ -1701,7 +1663,7 @@ export default function ShoppingListApp() {
             </button>
           </div>
           {loadingUsers ? (
-            <p style={{ color: 'var(--text-secondary)' }}>Loading users...</p>
+            <p className="text-secondary">Loading users...</p>
           ) : (
             <div className="table-wrapper">
               <table>
@@ -1746,7 +1708,7 @@ export default function ShoppingListApp() {
                       </td>
                       <td>
                         {u.role !== 'admin' ? (
-                          <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+                          <div className="user-row-actions">
                             {u.status !== 'revoked' && (
                               <button
                                 type="button"
@@ -1767,7 +1729,7 @@ export default function ShoppingListApp() {
                             )}
                           </div>
                         ) : (
-                          <span style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
+                          <span className="primary-admin-label">
                             Primary Admin
                           </span>
                         )}
@@ -1813,11 +1775,11 @@ export default function ShoppingListApp() {
 
             {storeModalError && <div className="alert alert-error">{storeModalError}</div>}
 
-            <form onSubmit={handleAddCustomStore} style={{ marginBottom: '1.25rem' }}>
+            <form onSubmit={handleAddCustomStore} className="store-add-form">
               <label className="form-label" htmlFor="new-store-modal-input">
                 Add New Store
               </label>
-              <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.35rem' }}>
+              <div className="store-add-input-row">
                 <input
                   id="new-store-modal-input"
                   className="input"
@@ -1828,8 +1790,7 @@ export default function ShoppingListApp() {
                 />
                 <button
                   type="submit"
-                  className="btn btn-primary"
-                  style={{ flexShrink: 0 }}
+                  className="btn btn-primary btn-no-shrink"
                   disabled={!customStoreInput.trim()}
                 >
                   Add Store
@@ -1838,43 +1799,25 @@ export default function ShoppingListApp() {
             </form>
 
             <div>
-              <div className="form-label" style={{ marginBottom: '0.5rem' }}>
+              <div className="form-label store-list-heading">
                 Current Stores ({stores.length})
               </div>
-              <div
-                style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '0.5rem',
-                  maxHeight: '280px',
-                  overflowY: 'auto',
-                }}
-              >
+              <div className="store-modal-list">
                 {stores.map((store) => (
                   <div
                     key={store.id}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      gap: '0.5rem',
-                      padding: '0.55rem 0.75rem',
-                      background: 'var(--bg-primary)',
-                      border: '1px solid var(--border)',
-                      borderRadius: 8,
-                    }}
+                    className="store-modal-item"
                   >
                     {editingStoreId === store.id ? (
                       <form
                         onSubmit={(e) => handleUpdateStore(store, e)}
-                        style={{ display: 'flex', gap: '0.4rem', width: '100%', alignItems: 'center' }}
+                        className="store-edit-form"
                       >
                         <input
-                          className="input"
+                          className="input input-compact"
                           type="text"
                           value={editingStoreName}
                           onChange={(e) => setEditingStoreName(e.target.value)}
-                          style={{ padding: '0.4rem 0.65rem', fontSize: '0.9rem' }}
                           autoFocus
                           required
                         />
@@ -1899,7 +1842,7 @@ export default function ShoppingListApp() {
                       </form>
                     ) : (
                       <>
-                        <span style={{ fontWeight: 500, overflowWrap: 'anywhere' }}>
+                        <span className="store-modal-name">
                           🏬 {store.name}
                         </span>
                         <button
@@ -1941,18 +1884,12 @@ export default function ShoppingListApp() {
               ref={videoRef}
               playsInline
               muted
-              style={{
-                width: '100%',
-                borderRadius: 8,
-                background: '#000',
-                marginBottom: '1rem',
-              }}
+              className="camera-video"
             />
-            <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <div className="camera-actions">
               <button
                 type="button"
-                className="btn btn-primary"
-                style={{ flex: 1 }}
+                className="btn btn-primary btn-flex-1"
                 onClick={captureFrameFromVideo}
               >
                 📸 Capture Photo
@@ -1972,7 +1909,7 @@ export default function ShoppingListApp() {
       {/* QR Code Invite Modal */}
       {inviteModalOpen && generatedInvite && (
         <div className="modal-backdrop">
-          <div className="modal-content" style={{ textAlign: 'center' }}>
+          <div className="modal-content modal-content-centered">
             <div className="card-title">
               <span>📱 Scan QR Code to Add User</span>
               <button
@@ -1983,20 +1920,12 @@ export default function ShoppingListApp() {
                 Close
               </button>
             </div>
-            <p style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', marginBottom: '1rem' }}>
+            <p className="invite-modal-description">
               Have the new user scan this QR code with their phone camera. This invite is valid for{' '}
               <strong>1 use only</strong> and <strong>expires in 30 minutes</strong> (at{' '}
               {new Date(generatedInvite.expiresAt).toLocaleTimeString()}).
             </p>
-            <div
-              style={{
-                background: '#ffffff',
-                padding: '1rem',
-                borderRadius: 12,
-                display: 'inline-block',
-                marginBottom: '1rem',
-              }}
-            >
+            <div className="qr-code-frame">
               <img
                 src={generatedInvite.qrCodeDataUrl}
                 alt="Invite QR Code"
@@ -2006,8 +1935,7 @@ export default function ShoppingListApp() {
             </div>
             <button
               type="button"
-              className="btn btn-primary"
-              style={{ width: '100%' }}
+              className="btn btn-primary btn-full"
               onClick={() => setInviteModalOpen(false)}
             >
               Done
@@ -2033,7 +1961,7 @@ export default function ShoppingListApp() {
             <img
               src={previewImage}
               alt="Item full preview"
-              style={{ width: '100%', borderRadius: 8 }}
+              className="preview-lightbox-img"
             />
           </div>
         </div>
