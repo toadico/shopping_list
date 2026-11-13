@@ -89,6 +89,7 @@ const createItemSchema = z.object({
   storeId: z.string().nullable().optional(),
   storeName: z.string().max(80).nullable().optional(),
   imageData: z.string().nullable().optional(),
+  oneTime: z.boolean().optional(),
   checked: z.boolean().optional(),
 });
 
@@ -99,6 +100,7 @@ const updateItemSchema = z.object({
   storeId: z.string().nullable().optional(),
   storeName: z.string().max(80).nullable().optional(),
   imageData: z.string().nullable().optional(),
+  oneTime: z.boolean().optional(),
   checked: z.boolean().optional(),
 });
 
@@ -395,13 +397,14 @@ apiRouter.patch(
       const parsed = updateItemSchema.parse(req.body);
       const db = getDb();
       const item = updateItem(db, String(req.params.id), parsed, req.user!);
+      const deleted = Boolean(item.oneTime && item.checked);
       broadcastEvent({
         type: 'items_updated',
         items: listItems(db),
         stores: listStores(db),
         timestamp: new Date().toISOString(),
       });
-      res.status(200).json({ item });
+      res.status(200).json({ item, deleted });
     } catch (err) {
       next(err);
     }

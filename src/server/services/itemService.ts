@@ -20,6 +20,7 @@ export interface ShoppingItemRecord {
   store_id: string | null;
   store_name: string;
   image_data: string | null;
+  one_time: number;
   checked: number;
   checked_by: string | null;
   checked_by_name: string | null;
@@ -38,6 +39,7 @@ export interface ShoppingItemDTO {
   storeId: string | null;
   storeName: string;
   imageData: string | null;
+  oneTime: boolean;
   checked: boolean;
   checkedBy: string | null;
   checkedByName: string | null;
@@ -56,6 +58,7 @@ export interface CreateItemInput {
   storeId?: string | null;
   storeName?: string | null;
   imageData?: string | null;
+  oneTime?: boolean;
   checked?: boolean;
 }
 
@@ -66,6 +69,7 @@ export interface UpdateItemInput {
   storeId?: string | null;
   storeName?: string | null;
   imageData?: string | null;
+  oneTime?: boolean;
   checked?: boolean;
 }
 
@@ -88,6 +92,7 @@ export function toItemDTO(row: ShoppingItemRecord): ShoppingItemDTO {
     storeId: row.store_id,
     storeName: row.store_name,
     imageData: row.image_data,
+    oneTime: row.one_time === 1,
     checked: row.checked === 1,
     checkedBy: row.checked_by ?? null,
     checkedByName: row.checked_by_name ?? null,
@@ -205,17 +210,40 @@ export function createItem(
 
   const id = input.id && input.id.trim() !== '' ? input.id.trim() : crypto.randomUUID();
   const now = new Date().toISOString();
+  const oneTime = input.oneTime ? 1 : 0;
   const checked = input.checked ? 1 : 0;
   const checkedBy = checked === 1 ? user.id : null;
   const checkedByName = checked === 1 ? user.name : null;
   const checkedAt = checked === 1 ? now : null;
 
+  if (checked === 1 && oneTime === 1) {
+    db.prepare('DELETE FROM shopping_items WHERE id = ?').run(id);
+    return {
+      id,
+      name,
+      quantity,
+      notes,
+      storeId,
+      storeName,
+      imageData: validImage,
+      oneTime: true,
+      checked: true,
+      checkedBy,
+      checkedByName,
+      checkedAt,
+      createdBy: user.id,
+      createdByName: user.name,
+      updatedAt: now,
+      createdAt: now,
+    };
+  }
+
   db.prepare(
     `INSERT INTO shopping_items (
-      id, name, quantity, notes, store_id, store_name, image_data,
+      id, name, quantity, notes, store_id, store_name, image_data, one_time,
       checked, checked_by, checked_by_name, checked_at,
       created_by, created_by_name, updated_at, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       name = excluded.name,
       quantity = excluded.quantity,
@@ -223,6 +251,7 @@ export function createItem(
       store_id = excluded.store_id,
       store_name = excluded.store_name,
       image_data = COALESCE(excluded.image_data, shopping_items.image_data),
+      one_time = excluded.one_time,
       checked = excluded.checked,
       checked_by = CASE WHEN excluded.checked = 1 THEN COALESCE(excluded.checked_by, shopping_items.checked_by) ELSE NULL END,
       checked_by_name = CASE WHEN excluded.checked = 1 THEN COALESCE(excluded.checked_by_name, shopping_items.checked_by_name) ELSE NULL END,
@@ -236,6 +265,7 @@ export function createItem(
     storeId,
     storeName,
     validImage,
+    oneTime,
     checked,
     checkedBy,
     checkedByName,
@@ -298,9 +328,34 @@ export function updateItem(
     imageData = validateImageData(input.imageData);
   }
 
+  const oneTime =
+    input.oneTime !== undefined ? (input.oneTime ? 1 : 0) : (existing.one_time ?? 0);
   const checked =
     input.checked !== undefined ? (input.checked ? 1 : 0) : existing.checked;
   const now = new Date().toISOString();
+
+  // If a one-time purchase item is checked, automatically delete it so it is not moved to checked items
+  if (checked === 1 && oneTime === 1) {
+    db.prepare('DELETE FROM shopping_items WHERE id = ?').run(itemId);
+    return {
+      id: existing.id,
+      name,
+      quantity,
+      notes,
+      storeId,
+      storeName,
+      imageData,
+      oneTime: true,
+      checked: true,
+      checkedBy: user.id,
+      checkedByName: user.name,
+      checkedAt: now,
+      createdBy: existing.created_by,
+      createdByName: existing.created_by_name,
+      updatedAt: now,
+      createdAt: existing.created_at,
+    };
+  }
 
   let checkedBy = existing.checked_by;
   let checkedByName = existing.checked_by_name;
@@ -323,7 +378,7 @@ export function updateItem(
   db.prepare(
     `UPDATE shopping_items
      SET name = ?, quantity = ?, notes = ?, store_id = ?, store_name = ?,
-         image_data = ?, checked = ?, checked_by = ?, checked_by_name = ?,
+         image_data = ?, one_time = ?, checked = ?, checked_by = ?, checked_by_name = ?,
          checked_at = ?, updated_at = ?
      WHERE id = ?`
   ).run(
@@ -333,6 +388,7 @@ export function updateItem(
     storeId,
     storeName,
     imageData,
+    oneTime,
     checked,
     checkedBy,
     checkedByName,

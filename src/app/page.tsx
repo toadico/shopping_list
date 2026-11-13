@@ -117,6 +117,7 @@ export default function ShoppingListApp() {
   const [items, setItems] = useState<ShoppingItem[]>([]);
   const [stores, setStores] = useState<Store[]>([]);
   const [filterStore, setFilterStore] = useState<string>('ALL');
+  const [listView, setListView] = useState<'unchecked' | 'checked'>('unchecked');
 
   // Add item form state
   const [itemName, setItemName] = useState('');
@@ -129,6 +130,9 @@ export default function ShoppingListApp() {
   const [editingStoreName, setEditingStoreName] = useState('');
   const [storeModalError, setStoreModalError] = useState<string | null>(null);
   const [attachedImage, setAttachedImage] = useState<string | null>(null);
+  const [isOneTimePurchase, setIsOneTimePurchase] = useState<boolean>(false);
+  const [showCheckedSuggestions, setShowCheckedSuggestions] = useState<boolean>(false);
+  const [selectedCheckedItemId, setSelectedCheckedItemId] = useState<string | null>(null);
   const [submittingItem, setSubmittingItem] = useState(false);
 
   // Camera capture modal state
@@ -730,6 +734,16 @@ export default function ShoppingListApp() {
     }
   };
 
+  const handleSelectCheckedSuggestion = (suggestion: ShoppingItem) => {
+    setItemName(suggestion.name);
+    setSelectedStoreName(suggestion.storeName);
+    setItemNotes(suggestion.notes || '');
+    setAttachedImage(suggestion.imageData || null);
+    setIsOneTimePurchase(false);
+    setSelectedCheckedItemId(suggestion.id);
+    setShowCheckedSuggestions(false);
+  };
+
   // Add Shopping Item (online with offline queue fallback)
   const handleAddItem = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -745,10 +759,28 @@ export default function ShoppingListApp() {
     const effectiveStoreName = customStoreInput.trim() || selectedStoreName || 'Supermarket';
     setSubmittingItem(true);
 
+    // If re-adding a suggested or matching checked item, reuse its id so it moves from Checked Items back to the active Shopping List
+    const matchedCheckedItem =
+      (selectedCheckedItemId
+        ? items.find(
+            (i) =>
+              i.id === selectedCheckedItemId &&
+              i.checked &&
+              i.name.toLowerCase() === trimmedName.toLowerCase()
+          )
+        : undefined) ??
+      items.find(
+        (i) =>
+          i.checked &&
+          i.name.toLowerCase() === trimmedName.toLowerCase() &&
+          i.storeName.toLowerCase() === effectiveStoreName.toLowerCase()
+      );
+
     const clientItemId =
-      typeof crypto !== 'undefined' && 'randomUUID' in crypto
+      matchedCheckedItem?.id ??
+      (typeof crypto !== 'undefined' && 'randomUUID' in crypto
         ? crypto.randomUUID()
-        : `item-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        : `item-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
 
     const payload = {
       id: clientItemId,
@@ -757,6 +789,7 @@ export default function ShoppingListApp() {
       notes: itemNotes.trim(),
       storeName: effectiveStoreName,
       imageData: attachedImage,
+      oneTime: isOneTimePurchase,
       checked: false,
     };
 
@@ -809,6 +842,7 @@ export default function ShoppingListApp() {
         storeId: null,
         storeName: effectiveStoreName,
         imageData: payload.imageData,
+        oneTime: payload.oneTime,
         checked: false,
         checkedBy: null,
         checkedByName: null,
@@ -818,7 +852,7 @@ export default function ShoppingListApp() {
         updatedAt: now,
         createdAt: now,
       };
-      const updatedItems = [offlineItem, ...items];
+      const updatedItems = [offlineItem, ...items.filter((i) => i.id !== clientItemId)];
       setItems(updatedItems);
       await saveCachedItems(updatedItems);
 
@@ -849,6 +883,9 @@ export default function ShoppingListApp() {
       setItemNotes('');
       setCustomStoreInput('');
       setAttachedImage(null);
+      setIsOneTimePurchase(false);
+      setSelectedCheckedItemId(null);
+      setShowCheckedSuggestions(false);
       if (fileInputRef.current) {
         fileInputRef.current.value = '';
       }
@@ -905,6 +942,35 @@ export default function ShoppingListApp() {
 
   const handleToggleItemChecked = async (item: ShoppingItem) => {
     const nextChecked = !item.checked;
+
+    // One-time purchase items are automatically deleted when checked and do not move to Checked Items
+    if (nextChecked && item.oneTime) {
+      const remaining = items.filter((i) => i.id !== item.id);
+      setItems(remaining);
+      await saveCachedItems(remaining);
+
+      try {
+        if (!isOnline || !apiKey) {
+          throw new Error('OFFLINE');
+        }
+        await fetch(`/api/items/${encodeURIComponent(item.id)}`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({ checked: true }),
+        });
+      } catch {
+        await enqueueOfflineMutation({
+          type: 'delete',
+          itemId: item.id,
+        });
+        await refreshPendingCount();
+      }
+      return;
+    }
+
     const now = new Date().toISOString();
     const optimistic = items.map((i) =>
       i.id === item.id
@@ -935,9 +1001,15 @@ export default function ShoppingListApp() {
       });
       if (res.ok) {
         const data = await res.json();
-        const synced = optimistic.map((i) => (i.id === item.id ? data.item : i));
-        setItems(synced);
-        await saveCachedItems(synced);
+        if (data.deleted) {
+          const remaining = optimistic.filter((i) => i.id !== item.id);
+          setItems(remaining);
+          await saveCachedItems(remaining);
+        } else {
+          const synced = optimistic.map((i) => (i.id === item.id ? data.item : i));
+          setItems(synced);
+          await saveCachedItems(synced);
+        }
       }
     } catch {
       await enqueueOfflineMutation({
@@ -1058,12 +1130,45 @@ export default function ShoppingListApp() {
     }
   };
 
-  const filteredItems = items.filter((item) => {
+  const uncheckedItems = items.filter((item) => !item.checked);
+  const checkedItems = items.filter((item) => item.checked);
+
+  const filteredUncheckedItems = uncheckedItems.filter((item) => {
     if (filterStore !== 'ALL' && item.storeName.toLowerCase() !== filterStore.toLowerCase()) {
       return false;
     }
     return true;
   });
+
+  const filteredCheckedItems = checkedItems.filter((item) => {
+    if (filterStore !== 'ALL' && item.storeName.toLowerCase() !== filterStore.toLowerCase()) {
+      return false;
+    }
+    return true;
+  });
+
+  // Search through checked items as the user types an item name to suggest previously checked items
+  const checkedSuggestions = React.useMemo(() => {
+    const query = itemName.trim().toLowerCase();
+    if (!query) {
+      return [];
+    }
+    const seen = new Set<string>();
+    const matches: ShoppingItem[] = [];
+    for (const item of checkedItems) {
+      if (item.name.toLowerCase().includes(query)) {
+        const key = `${item.name.toLowerCase()}::${item.storeName.toLowerCase()}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          matches.push(item);
+          if (matches.length >= 6) {
+            break;
+          }
+        }
+      }
+    }
+    return matches;
+  }, [checkedItems, itemName]);
 
   if (authLoading) {
     return (
@@ -1245,82 +1350,487 @@ export default function ShoppingListApp() {
       {/* Shopping List & Add Item Sections (Not shown to shopping_admin) */}
       {currentUser.role !== 'admin' && currentUser.username !== 'shopping_admin' && (
         <>
-          {/* Shopping List Section */}
-          <section className="card">
-            <div className="card-title">
-              <span>📋 Shopping List ({filteredItems.length})</span>
-              {pendingSyncCount > 0 && isOnline && apiKey && (
-                <button
-                  type="button"
-                  className="btn btn-sm btn-primary"
-                  onClick={() => syncOfflineQueue(apiKey)}
-                >
-                  🔄 Sync Now ({pendingSyncCount})
-                </button>
-              )}
-            </div>
+          {listView === 'unchecked' ? (
+            <>
+              {/* Active (Unchecked) Shopping List Section */}
+              <section className="card">
+                <div className="card-title">
+                  <span>📋 Shopping List ({filteredUncheckedItems.length})</span>
+                  <div className="card-title-actions">
+                    {pendingSyncCount > 0 && isOnline && apiKey && (
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-primary"
+                        onClick={() => syncOfflineQueue(apiKey)}
+                      >
+                        🔄 Sync Now ({pendingSyncCount})
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-secondary"
+                      onClick={() => setListView('checked')}
+                      data-testid="view-checked-items-btn"
+                    >
+                      ✅ Checked Items ({checkedItems.length})
+                    </button>
+                  </div>
+                </div>
 
-            {/* Store Filter Bar */}
-            <div className="store-chips store-chips-filter">
-              <button
-                type="button"
-                className={`store-chip ${filterStore === 'ALL' ? 'active' : ''}`}
-                onClick={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  setFilterStore('ALL');
-                }}
-              >
-                All Stores ({items.length})
-              </button>
-              {stores.map((s) => {
-                const count = items.filter(
-                  (i) => i.storeName.toLowerCase() === s.name.toLowerCase()
-                ).length;
-                return (
+                {/* Store Filter Bar */}
+                <div className="store-chips store-chips-filter">
                   <button
-                    key={s.id}
                     type="button"
-                    className={`store-chip ${
-                      filterStore.toLowerCase() === s.name.toLowerCase() ? 'active' : ''
-                    }`}
+                    className={`store-chip ${filterStore === 'ALL' ? 'active' : ''}`}
                     onClick={(e) => {
                       e.preventDefault();
                       e.stopPropagation();
-                      setFilterStore(s.name);
+                      setFilterStore('ALL');
                     }}
                   >
-                    {s.name} ({count})
+                    All Stores ({uncheckedItems.length})
                   </button>
-                );
-              })}
-            </div>
+                  {stores.map((s) => {
+                    const count = uncheckedItems.filter(
+                      (i) => i.storeName.toLowerCase() === s.name.toLowerCase()
+                    ).length;
+                    return (
+                      <button
+                        key={s.id}
+                        type="button"
+                        className={`store-chip ${
+                          filterStore.toLowerCase() === s.name.toLowerCase() ? 'active' : ''
+                        }`}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setFilterStore(s.name);
+                        }}
+                      >
+                        {s.name} ({count})
+                      </button>
+                    );
+                  })}
+                </div>
 
-            {filteredItems.length === 0 ? (
-              <p className="empty-list-message">
-                No shopping list items yet. Add your first item below!
-              </p>
-            ) : (
-              <div className="item-list">
-                {filteredItems.map((item) => {
-                  const numericQuantity = parseItemQuantity(item.quantity);
-                  return (
-                    <div
-                      key={item.id}
-                      className={`item-row ${item.checked ? 'checked' : ''}`}
-                    >
-                      <div className={`item-name-row ${item.checked ? 'checked' : ''}`}>
-                        {item.name}
+                {filteredUncheckedItems.length === 0 ? (
+                  <p className="empty-list-message">
+                    No unchecked shopping list items. Add an item below or view checked items!
+                  </p>
+                ) : (
+                  <div className="item-list">
+                    {filteredUncheckedItems.map((item) => {
+                      const numericQuantity = parseItemQuantity(item.quantity);
+                      return (
+                        <div key={item.id} className="item-row">
+                          <div className="item-name-row">{item.name}</div>
+
+                          <div className="item-body-row">
+                            <div className="item-main">
+                              <input
+                                type="checkbox"
+                                className="item-checkbox"
+                                checked={false}
+                                onChange={() => handleToggleItemChecked(item)}
+                                aria-label={`Mark ${item.name} as purchased`}
+                              />
+
+                              {item.imageData && (
+                                <img
+                                  src={item.imageData}
+                                  alt={item.name}
+                                  className="item-thumb"
+                                  onClick={() => setPreviewImage(item.imageData)}
+                                  title="Click to enlarge attached picture"
+                                />
+                              )}
+
+                              <div className="item-details">
+                                <div className="item-meta-row">
+                                  <span className="badge badge-store">🏬 {item.storeName}</span>
+                                  {item.oneTime && (
+                                    <span className="badge badge-offline" title="Automatically deleted when checked">
+                                      🗑️ One-Time
+                                    </span>
+                                  )}
+                                  <span className="item-meta-text">
+                                    {`Added by ${item.createdByName} (${formatDaysCount(
+                                      getDaysElapsed(item.createdAt)
+                                    )} on list)`}
+                                  </span>
+                                </div>
+
+                                {item.notes && (
+                                  <div className="item-notes-text">
+                                    📝 {item.notes}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+
+                            <div className="item-actions">
+                              <div
+                                className="quantity-stepper"
+                                role="group"
+                                aria-label={`Quantity controls for ${item.name}`}
+                              >
+                                <button
+                                  type="button"
+                                  className="quantity-btn"
+                                  onClick={() => handleUpdateItemQuantity(item, -1)}
+                                  disabled={numericQuantity <= 1}
+                                  aria-label={`Decrease quantity for ${item.name}`}
+                                  title="Subtract 1"
+                                >
+                                  −
+                                </button>
+                                <span
+                                  className="quantity-value"
+                                  aria-live="polite"
+                                  data-testid={`item-quantity-${item.id}`}
+                                >
+                                  {numericQuantity}
+                                </span>
+                                <button
+                                  type="button"
+                                  className="quantity-btn"
+                                  onClick={() => handleUpdateItemQuantity(item, 1)}
+                                  aria-label={`Increase quantity for ${item.name}`}
+                                  title="Add 1"
+                                >
+                                  +
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
+
+              {/* Add Item Section */}
+              <section className="card">
+                <div className="card-title">
+                  <span>➕ Add Item to Shopping List</span>
+                </div>
+
+                <form onSubmit={handleAddItem}>
+                  <div className="form-grid">
+                    <div className="form-group item-name-autocomplete">
+                      <label className="form-label" htmlFor="item-name">
+                        Item Name *
+                      </label>
+                      <input
+                        id="item-name"
+                        className="input"
+                        type="text"
+                        placeholder="e.g., Organic Whole Milk"
+                        value={itemName}
+                        autoComplete="off"
+                        onFocus={() => setShowCheckedSuggestions(true)}
+                        onBlur={() => {
+                          window.setTimeout(() => setShowCheckedSuggestions(false), 150);
+                        }}
+                        onChange={(e) => {
+                          setItemName(e.target.value);
+                          setSelectedCheckedItemId(null);
+                          setShowCheckedSuggestions(true);
+                        }}
+                        required
+                      />
+                      {showCheckedSuggestions && checkedSuggestions.length > 0 && (
+                        <div
+                          className="suggestions-dropdown"
+                          role="listbox"
+                          aria-label="Suggested checked items"
+                          data-testid="checked-item-suggestions"
+                        >
+                          <div className="suggestions-header">
+                            Suggested from Checked Items
+                          </div>
+                          {checkedSuggestions.map((suggestion) => (
+                            <button
+                              key={suggestion.id}
+                              type="button"
+                              className="suggestion-item"
+                              role="option"
+                              onMouseDown={(e) => {
+                                e.preventDefault();
+                                handleSelectCheckedSuggestion(suggestion);
+                              }}
+                              onClick={() => handleSelectCheckedSuggestion(suggestion)}
+                            >
+                              <span className="suggestion-name">{suggestion.name}</span>
+                              <span className="badge badge-store">🏬 {suggestion.storeName}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="form-group">
+                      <label className="form-label" id="add-item-quantity-label">
+                        Quantity
+                      </label>
+                      <div
+                        className="quantity-stepper-form"
+                        role="group"
+                        aria-labelledby="add-item-quantity-label"
+                      >
+                        <button
+                          type="button"
+                          className="quantity-btn"
+                          onClick={() => setItemQuantity((prev) => Math.max(1, prev - 1))}
+                          disabled={itemQuantity <= 1}
+                          aria-label="Decrease quantity"
+                          title="Subtract 1"
+                        >
+                          −
+                        </button>
+                        <span
+                          id="item-quantity"
+                          className="quantity-value"
+                          aria-live="polite"
+                          data-testid="add-item-quantity-value"
+                        >
+                          {itemQuantity}
+                        </span>
+                        <button
+                          type="button"
+                          className="quantity-btn"
+                          onClick={() => setItemQuantity((prev) => prev + 1)}
+                          aria-label="Increase quantity"
+                          title="Add 1"
+                        >
+                          +
+                        </button>
                       </div>
+                    </div>
+                  </div>
+
+                  <button
+                    type="submit"
+                    className="btn btn-primary btn-full btn-spaced-bottom"
+                    disabled={submittingItem}
+                  >
+                    {submittingItem ? 'Adding Item...' : 'Add Item to Shopping List'}
+                  </button>
+
+                  {/* Button Store Selection + Add Store Button Below */}
+                  <div className="form-group">
+                    <label className="form-label">
+                      Store (Selected: <strong>{selectedStoreName}</strong>)
+                    </label>
+
+                    <div className="store-chips">
+                      {stores.map((store) => (
+                        <button
+                          key={store.id}
+                          type="button"
+                          className={`store-chip ${
+                            selectedStoreName.toLowerCase() === store.name.toLowerCase()
+                              ? 'active'
+                              : ''
+                          }`}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setSelectedStoreName(store.name);
+                          }}
+                        >
+                          🏬 {store.name}
+                        </button>
+                      ))}
+                    </div>
+
+                    <div className="manage-stores-trigger">
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setCustomStoreInput('');
+                          setEditingStoreId(null);
+                          setEditingStoreName('');
+                          setStoreModalError(null);
+                          setAddStoreModalOpen(true);
+                        }}
+                      >
+                        🏬 Manage Stores
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Notes & Picture Attachment */}
+                  <div className="form-grid form-grid-end">
+                    <div className="form-group">
+                      <label className="form-label" htmlFor="item-notes">
+                        Notes (Optional)
+                      </label>
+                      <input
+                        id="item-notes"
+                        className="input"
+                        type="text"
+                        placeholder="Brand preference, aisle, size..."
+                        value={itemNotes}
+                        onChange={(e) => setItemNotes(e.target.value)}
+                      />
+                    </div>
+
+                    <div className="form-group">
+                      <label className="form-label">Attach Picture (Camera or Photo)</label>
+                      <div className="picture-btn-group">
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          onClick={openLiveCamera}
+                        >
+                          📷 Take Picture
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          onClick={() => fileInputRef.current?.click()}
+                        >
+                          🖼️ Upload / Camera File
+                        </button>
+                        <input
+                          ref={fileInputRef}
+                          type="file"
+                          accept="image/*"
+                          capture="environment"
+                          className="hidden-input"
+                          onChange={handleFileInputChange}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {attachedImage && (
+                    <div className="attached-preview-bar">
+                      <img
+                        src={attachedImage}
+                        alt="Attached preview"
+                        className="item-thumb"
+                      />
+                      <div className="attached-preview-text">
+                        Picture attached and ready to save with this item.
+                      </div>
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-danger"
+                        onClick={() => setAttachedImage(null)}
+                      >
+                        Remove Picture
+                      </button>
+                    </div>
+                  )}
+
+                  {/* One-Time Purchase Item Button (Underneath Taking Picture) */}
+                  <div className="form-group">
+                    <label className="form-label">One-Time Purchase</label>
+                    <div className="store-chips">
+                      <button
+                        type="button"
+                        className={`store-chip ${isOneTimePurchase ? 'active' : ''}`}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setIsOneTimePurchase((prev) => !prev);
+                        }}
+                        aria-pressed={isOneTimePurchase}
+                        data-testid="one-time-purchase-btn"
+                      >
+                        🗑️ One-Time Purchase Item
+                      </button>
+                    </div>
+                  </div>
+                </form>
+              </section>
+            </>
+          ) : (
+            /* Checked Items Page */
+            <section className="card" data-testid="checked-items-page">
+              <div className="card-title">
+                <span>✅ Checked Items ({filteredCheckedItems.length})</span>
+                <div className="card-title-actions">
+                  {pendingSyncCount > 0 && isOnline && apiKey && (
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-primary"
+                      onClick={() => syncOfflineQueue(apiKey)}
+                    >
+                      🔄 Sync Now ({pendingSyncCount})
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-secondary"
+                    onClick={() => setListView('unchecked')}
+                    data-testid="back-to-shopping-list-btn"
+                  >
+                    ⬅️ Back to Shopping List ({uncheckedItems.length})
+                  </button>
+                </div>
+              </div>
+
+              {/* Store Filter Bar for Checked Items */}
+              <div className="store-chips store-chips-filter">
+                <button
+                  type="button"
+                  className={`store-chip ${filterStore === 'ALL' ? 'active' : ''}`}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setFilterStore('ALL');
+                  }}
+                >
+                  All Stores ({checkedItems.length})
+                </button>
+                {stores.map((s) => {
+                  const count = checkedItems.filter(
+                    (i) => i.storeName.toLowerCase() === s.name.toLowerCase()
+                  ).length;
+                  return (
+                    <button
+                      key={s.id}
+                      type="button"
+                      className={`store-chip ${
+                        filterStore.toLowerCase() === s.name.toLowerCase() ? 'active' : ''
+                      }`}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setFilterStore(s.name);
+                      }}
+                    >
+                      {s.name} ({count})
+                    </button>
+                  );
+                })}
+              </div>
+
+              {filteredCheckedItems.length === 0 ? (
+                <p className="empty-list-message">
+                  No checked items yet. Items you check off on the shopping list will appear here!
+                </p>
+              ) : (
+                <div className="item-list">
+                  {filteredCheckedItems.map((item) => (
+                    <div key={item.id} className="item-row checked">
+                      <div className="item-name-row checked">{item.name}</div>
 
                       <div className="item-body-row">
                         <div className="item-main">
                           <input
                             type="checkbox"
                             className="item-checkbox"
-                            checked={item.checked}
+                            checked={true}
                             onChange={() => handleToggleItemChecked(item)}
-                            aria-label={`Mark ${item.name} as ${item.checked ? 'unpurchased' : 'purchased'}`}
+                            aria-label={`Mark ${item.name} as unpurchased`}
                           />
 
                           {item.imageData && (
@@ -1337,13 +1847,9 @@ export default function ShoppingListApp() {
                             <div className="item-meta-row">
                               <span className="badge badge-store">🏬 {item.storeName}</span>
                               <span className="item-meta-text">
-                                {item.checked
-                                  ? `Gotten by ${item.checkedByName || item.createdByName} (${formatDaysCount(
-                                      getDaysElapsed(item.checkedAt || item.updatedAt)
-                                    )} ago)`
-                                  : `Added by ${item.createdByName} (${formatDaysCount(
-                                      getDaysElapsed(item.createdAt)
-                                    )} on list)`}
+                                {`Gotten by ${item.checkedByName || item.createdByName} (${formatDaysCount(
+                                  getDaysElapsed(item.checkedAt || item.updatedAt)
+                                )} ago)`}
                               </span>
                             </div>
 
@@ -1356,240 +1862,21 @@ export default function ShoppingListApp() {
                         </div>
 
                         <div className="item-actions">
-                          {!item.checked ? (
-                            <div
-                              className="quantity-stepper"
-                              role="group"
-                              aria-label={`Quantity controls for ${item.name}`}
-                            >
-                              <button
-                                type="button"
-                                className="quantity-btn"
-                                onClick={() => handleUpdateItemQuantity(item, -1)}
-                                disabled={numericQuantity <= 1}
-                                aria-label={`Decrease quantity for ${item.name}`}
-                                title="Subtract 1"
-                              >
-                                −
-                              </button>
-                              <span
-                                className="quantity-value"
-                                aria-live="polite"
-                                data-testid={`item-quantity-${item.id}`}
-                              >
-                                {numericQuantity}
-                              </span>
-                              <button
-                                type="button"
-                                className="quantity-btn"
-                                onClick={() => handleUpdateItemQuantity(item, 1)}
-                                aria-label={`Increase quantity for ${item.name}`}
-                                title="Add 1"
-                              >
-                                +
-                              </button>
-                            </div>
-                          ) : (
-                            <button
-                              type="button"
-                              className="btn btn-sm btn-danger"
-                              onClick={() => handleDeleteItem(item.id)}
-                            >
-                              Delete
-                            </button>
-                          )}
+                          <button
+                            type="button"
+                            className="btn btn-sm btn-danger"
+                            onClick={() => handleDeleteItem(item.id)}
+                          >
+                            Delete
+                          </button>
                         </div>
                       </div>
                     </div>
-                  );
-                })}
-              </div>
-            )}
-          </section>
-
-          {/* Add Item Section */}
-          <section className="card">
-            <div className="card-title">
-              <span>➕ Add Item to Shopping List</span>
-            </div>
-
-            <form onSubmit={handleAddItem}>
-              <div className="form-grid">
-                <div className="form-group">
-                  <label className="form-label" htmlFor="item-name">
-                    Item Name *
-                  </label>
-                  <input
-                    id="item-name"
-                    className="input"
-                    type="text"
-                    placeholder="e.g., Organic Whole Milk"
-                    value={itemName}
-                    onChange={(e) => setItemName(e.target.value)}
-                    required
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label className="form-label" id="add-item-quantity-label">
-                    Quantity
-                  </label>
-                  <div
-                    className="quantity-stepper-form"
-                    role="group"
-                    aria-labelledby="add-item-quantity-label"
-                  >
-                    <button
-                      type="button"
-                      className="quantity-btn"
-                      onClick={() => setItemQuantity((prev) => Math.max(1, prev - 1))}
-                      disabled={itemQuantity <= 1}
-                      aria-label="Decrease quantity"
-                      title="Subtract 1"
-                    >
-                      −
-                    </button>
-                    <span
-                      id="item-quantity"
-                      className="quantity-value"
-                      aria-live="polite"
-                      data-testid="add-item-quantity-value"
-                    >
-                      {itemQuantity}
-                    </span>
-                    <button
-                      type="button"
-                      className="quantity-btn"
-                      onClick={() => setItemQuantity((prev) => prev + 1)}
-                      aria-label="Increase quantity"
-                      title="Add 1"
-                    >
-                      +
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              <button
-                type="submit"
-                className="btn btn-primary btn-full btn-spaced-bottom"
-                disabled={submittingItem}
-              >
-                {submittingItem ? 'Adding Item...' : 'Add Item to Shopping List'}
-              </button>
-
-              {/* Button Store Selection + Add Store Button Below */}
-              <div className="form-group">
-                <label className="form-label">
-                  Store (Selected: <strong>{selectedStoreName}</strong>)
-                </label>
-
-                <div className="store-chips">
-                  {stores.map((store) => (
-                    <button
-                      key={store.id}
-                      type="button"
-                      className={`store-chip ${
-                        selectedStoreName.toLowerCase() === store.name.toLowerCase()
-                          ? 'active'
-                          : ''
-                      }`}
-                      onClick={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        setSelectedStoreName(store.name);
-                      }}
-                    >
-                      🏬 {store.name}
-                    </button>
                   ))}
                 </div>
-
-                <div className="manage-stores-trigger">
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-sm"
-                    onClick={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      setCustomStoreInput('');
-                      setEditingStoreId(null);
-                      setEditingStoreName('');
-                      setStoreModalError(null);
-                      setAddStoreModalOpen(true);
-                    }}
-                  >
-                    🏬 Manage Stores
-                  </button>
-                </div>
-              </div>
-
-              {/* Notes & Picture Attachment */}
-              <div className="form-grid form-grid-end">
-                <div className="form-group">
-                  <label className="form-label" htmlFor="item-notes">
-                    Notes (Optional)
-                  </label>
-                  <input
-                    id="item-notes"
-                    className="input"
-                    type="text"
-                    placeholder="Brand preference, aisle, size..."
-                    value={itemNotes}
-                    onChange={(e) => setItemNotes(e.target.value)}
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label className="form-label">Attach Picture (Camera or Photo)</label>
-                  <div className="picture-btn-group">
-                    <button
-                      type="button"
-                      className="btn btn-secondary"
-                      onClick={openLiveCamera}
-                    >
-                      📷 Take Picture
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-secondary"
-                      onClick={() => fileInputRef.current?.click()}
-                    >
-                      🖼️ Upload / Camera File
-                    </button>
-                    <input
-                      ref={fileInputRef}
-                      type="file"
-                      accept="image/*"
-                      capture="environment"
-                      className="hidden-input"
-                      onChange={handleFileInputChange}
-                    />
-                  </div>
-                </div>
-              </div>
-
-              {attachedImage && (
-                <div className="attached-preview-bar">
-                  <img
-                    src={attachedImage}
-                    alt="Attached preview"
-                    className="item-thumb"
-                  />
-                  <div className="attached-preview-text">
-                    Picture attached and ready to save with this item.
-                  </div>
-                  <button
-                    type="button"
-                    className="btn btn-sm btn-danger"
-                    onClick={() => setAttachedImage(null)}
-                  >
-                    Remove Picture
-                  </button>
-                </div>
               )}
-            </form>
-          </section>
+            </section>
+          )}
         </>
       )}
 

@@ -78,6 +78,7 @@ export function initializeSchema(db: DbInstance): void {
       store_id TEXT,
       store_name TEXT NOT NULL DEFAULT 'General',
       image_data TEXT,
+      one_time INTEGER NOT NULL DEFAULT 0,
       checked INTEGER NOT NULL DEFAULT 0,
       checked_by TEXT,
       checked_by_name TEXT,
@@ -139,6 +140,9 @@ export function initializeSchema(db: DbInstance): void {
       SET checked_at = updated_at
       WHERE checked = 1 AND checked_at IS NULL
     `);
+  }
+  if (!itemColumns.some((col) => col.name === 'one_time')) {
+    db.exec('ALTER TABLE shopping_items ADD COLUMN one_time INTEGER NOT NULL DEFAULT 0');
   }
 
   // Seed initial default stores if none exist

@@ -6,6 +6,7 @@ export interface ShoppingItem {
   storeId: string | null;
   storeName: string;
   imageData: string | null;
+  oneTime?: boolean;
   checked: boolean;
   checkedBy?: string | null;
   checkedByName?: string | null;

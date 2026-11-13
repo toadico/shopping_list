@@ -316,6 +316,25 @@ describe('Unit Tests: Error Hierarchy & Domain Services', () => {
       // Delete item
       deleteItem(db, item.id);
       expect(listItems(db).some((i) => i.id === item.id)).toBe(false);
+
+      // One-time purchase item is automatically deleted when checked and does not remain in checked items
+      const oneTimeItem = createItem(
+        db,
+        {
+          name: 'Birthday Candles',
+          quantity: '1',
+          storeName: 'Supermarket',
+          oneTime: true,
+        },
+        shopperUser
+      );
+      expect(oneTimeItem.oneTime).toBe(true);
+      expect(listItems(db).some((i) => i.id === oneTimeItem.id)).toBe(true);
+
+      const checkedOneTime = updateItem(db, oneTimeItem.id, { checked: true }, shopperUser);
+      expect(checkedOneTime.checked).toBe(true);
+      expect(checkedOneTime.oneTime).toBe(true);
+      expect(listItems(db).some((i) => i.id === oneTimeItem.id)).toBe(false);
     });
   });
 

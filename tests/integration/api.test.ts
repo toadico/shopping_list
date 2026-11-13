@@ -419,6 +419,34 @@ describe('Integration Tests: Express API Routes, Security & Probes', () => {
         .set('Authorization', `Bearer ${shopperApiKey}`);
       expect(deleteRes.status).toBe(204);
 
+      // One-time purchase item is automatically deleted from the list when checked
+      const oneTimeRes = await request(app)
+        .post('/api/items')
+        .set('Authorization', `Bearer ${shopperApiKey}`)
+        .send({
+          name: 'Party Balloons',
+          quantity: '1',
+          storeName: 'Target',
+          oneTime: true,
+        });
+      expect(oneTimeRes.status).toBe(201);
+      expect(oneTimeRes.body.item.oneTime).toBe(true);
+      const oneTimeId = oneTimeRes.body.item.id;
+
+      const checkOneTimeRes = await request(app)
+        .patch(`/api/items/${oneTimeId}`)
+        .set('Authorization', `Bearer ${shopperApiKey}`)
+        .send({ checked: true });
+      expect(checkOneTimeRes.status).toBe(200);
+      expect(checkOneTimeRes.body.deleted).toBe(true);
+
+      const listAfterOneTimeCheck = await request(app)
+        .get('/api/items')
+        .set('Authorization', `Bearer ${shopperApiKey}`);
+      expect(
+        listAfterOneTimeCheck.body.items.some((i: { id: string }) => i.id === oneTimeId)
+      ).toBe(false);
+
       // Deleting non-existent item returns 404
       const deleteMissingRes = await request(app)
         .delete(`/api/items/${itemId}`)
