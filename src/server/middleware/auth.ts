@@ -1,6 +1,10 @@
 import type { Request, Response, NextFunction } from 'express';
 import { getDb } from '../db/database.js';
-import { authenticateByApiKey, type PublicUser } from '../services/authService.js';
+import {
+  authenticateByApiKey,
+  USER_API_KEY_TTL_MS,
+  type PublicUser,
+} from '../services/authService.js';
 import { ForbiddenError, UnauthorizedError } from '../errors/AppError.js';
 
 declare global {
@@ -44,7 +48,7 @@ export function setAuthCookie(req: Request, res: Response, apiKey: string): void
     sameSite: 'strict',
     secure: isHttps,
     path: '/',
-    maxAge: 10 * 365 * 24 * 60 * 60 * 1000, // 10 years (non-expiring unless revoked)
+    maxAge: USER_API_KEY_TTL_MS, // 90 days (automatically renewed on access)
   });
 }
 
@@ -73,7 +77,7 @@ export function extractApiKey(req: Request): string | undefined {
   return undefined;
 }
 
-export function requireAuth(req: Request, _res: Response, next: NextFunction): void {
+export function requireAuth(req: Request, res: Response, next: NextFunction): void {
   try {
     const apiKey = extractApiKey(req);
     const user = authenticateByApiKey(getDb(), apiKey);
@@ -84,6 +88,14 @@ export function requireAuth(req: Request, _res: Response, next: NextFunction): v
       throw new UnauthorizedError(
         'The shopping_admin account does not use cookie authentication'
       );
+    }
+    if (
+      !res.headersSent &&
+      apiKey &&
+      user.role !== 'admin' &&
+      user.username !== 'shopping_admin'
+    ) {
+      setAuthCookie(req, res, apiKey);
     }
     req.user = user;
     next();

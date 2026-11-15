@@ -8,6 +8,8 @@ import {
   ValidationError,
 } from '../errors/AppError.js';
 
+export const USER_API_KEY_TTL_MS = 90 * 24 * 60 * 60 * 1000; // 90 days
+
 export interface UserRecord {
   id: string;
   name: string;
@@ -21,6 +23,7 @@ export interface UserRecord {
   invited_by: string | null;
   created_at: string;
   last_seen_at: string | null;
+  api_key_expires_at: string | null;
 }
 
 export interface PublicUser {
@@ -34,6 +37,7 @@ export interface PublicUser {
   invitedBy: string | null;
   createdAt: string;
   lastSeenAt: string | null;
+  apiKeyExpiresAt: string | null;
 }
 
 export interface InviteInfo {
@@ -57,6 +61,7 @@ export function toPublicUser(row: UserRecord): PublicUser {
     invitedBy: row.invited_by,
     createdAt: row.created_at,
     lastSeenAt: row.last_seen_at,
+    apiKeyExpiresAt: row.api_key_expires_at ?? null,
   };
 }
 
@@ -365,9 +370,36 @@ export function authenticateByApiKey(db: DbInstance, rawApiKey?: string): Public
     throw new ForbiddenError('Your API key access has been revoked by the administrator');
   }
 
-  const now = new Date().toISOString();
-  db.prepare('UPDATE users SET last_seen_at = ? WHERE id = ?').run(now, user.id);
+  const nowMs = Date.now();
+  const isAdminAccount = user.username === 'shopping_admin' || user.role === 'admin';
+
+  // Enforce 90-day inactivity expiration for user API keys and renew to 90 days on every access
+  if (!isAdminAccount) {
+    const expiryIso =
+      user.api_key_expires_at ??
+      new Date(
+        new Date(user.last_seen_at ?? user.created_at).getTime() + USER_API_KEY_TTL_MS
+      ).toISOString();
+    const expiryMs = new Date(expiryIso).getTime();
+    if (!Number.isNaN(expiryMs) && nowMs >= expiryMs) {
+      throw new UnauthorizedError(
+        'Your API key has expired after 90 days of inactivity'
+      );
+    }
+  }
+
+  const now = new Date(nowMs).toISOString();
+  const nextExpiresAt = isAdminAccount
+    ? user.api_key_expires_at
+    : new Date(nowMs + USER_API_KEY_TTL_MS).toISOString();
+
+  db.prepare('UPDATE users SET last_seen_at = ?, api_key_expires_at = ? WHERE id = ?').run(
+    now,
+    nextExpiresAt,
+    user.id
+  );
   user.last_seen_at = now;
+  user.api_key_expires_at = nextExpiresAt;
 
   return toPublicUser(user);
 }
@@ -491,7 +523,9 @@ export function redeemInviteToken(
   const apiKeyHash = hashApiKey(apiKey);
   const apiKeyPrefix = apiKey.slice(0, 10);
   const userId = crypto.randomUUID();
-  const now = new Date().toISOString();
+  const nowMs = Date.now();
+  const now = new Date(nowMs).toISOString();
+  const apiKeyExpiresAt = new Date(nowMs + USER_API_KEY_TTL_MS).toISOString();
 
   const tx = db.transaction(() => {
     const inviteRow = db
@@ -522,8 +556,8 @@ export function redeemInviteToken(
     db.prepare(
       `INSERT INTO users (
         id, name, username, password_hash, api_key_hash, api_key_prefix,
-        role, can_manage_users, status, invited_by, created_at, last_seen_at
-      ) VALUES (?, ?, NULL, NULL, ?, ?, 'user', ?, 'active', ?, ?, ?)`
+        role, can_manage_users, status, invited_by, created_at, last_seen_at, api_key_expires_at
+      ) VALUES (?, ?, NULL, NULL, ?, ?, 'user', ?, 'active', ?, ?, ?, ?)`
     ).run(
       userId,
       trimmedName,
@@ -532,7 +566,8 @@ export function redeemInviteToken(
       canManageUsers,
       inviteRow.created_by,
       now,
-      now
+      now,
+      apiKeyExpiresAt
     );
   });
 

@@ -179,11 +179,42 @@ describe('Unit Tests: Error Hierarchy & Domain Services', () => {
       expect(verified.grantsManageUsers).toBe(true);
 
       // New user 1 joins using shopping_admin's QR invite token -> receives canManageUsers = true
+      const beforeJoin = Date.now();
       const joined1 = redeemInviteToken(db, invite.token, 'Alice Shopper');
       expect(joined1.user.name).toBe('Alice Shopper');
       expect(joined1.user.role).toBe('user');
       expect(joined1.user.canManageUsers).toBe(true);
       expect(joined1.apiKey).toMatch(/^slk_/);
+      expect(joined1.user.apiKeyExpiresAt).toBeTruthy();
+      const initialKeyTtlMs = new Date(joined1.user.apiKeyExpiresAt!).getTime() - beforeJoin;
+      expect(initialKeyTtlMs).toBeGreaterThanOrEqual(89 * 24 * 60 * 60 * 1000);
+      expect(initialKeyTtlMs).toBeLessThanOrEqual(91 * 24 * 60 * 60 * 1000);
+
+      // Simulate near-expiry (1 day left) and verify accessing the system renews apiKeyExpiresAt back to 90 days
+      const oneDayFromNow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+      db.prepare('UPDATE users SET api_key_expires_at = ? WHERE id = ?').run(
+        oneDayFromNow,
+        joined1.user.id
+      );
+      const renewedUser = authenticateByApiKey(db, joined1.apiKey);
+      const renewedTtlMs = new Date(renewedUser.apiKeyExpiresAt!).getTime() - Date.now();
+      expect(renewedTtlMs).toBeGreaterThanOrEqual(89 * 24 * 60 * 60 * 1000);
+
+      // Simulate 90 days of inactivity (expired api_key_expires_at) -> rejected with UnauthorizedError
+      const expiredIso = new Date(Date.now() - 1000).toISOString();
+      db.prepare('UPDATE users SET api_key_expires_at = ? WHERE id = ?').run(
+        expiredIso,
+        joined1.user.id
+      );
+      expect(() => authenticateByApiKey(db, joined1.apiKey)).toThrow(
+        /expired after 90 days of inactivity/i
+      );
+
+      // Restore active 90-day expiry for remaining lifecycle assertions
+      db.prepare('UPDATE users SET api_key_expires_at = ? WHERE id = ?').run(
+        new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString(),
+        joined1.user.id
+      );
 
       // Admin's invite is also single-use, so reusing it must fail with ForbiddenError
       expect(() => redeemInviteToken(db, invite.token, 'Second Use')).toThrow(ForbiddenError);
@@ -284,6 +315,42 @@ describe('Unit Tests: Error Hierarchy & Domain Services', () => {
       expect(checkedItem.checkedBy).toBe(shopperUser.id);
       expect(checkedItem.checkedByName).toBe('Maya Shopper');
       expect(checkedItem.checkedAt).toBeTruthy();
+
+      // Simulate an older timestamp on the checked item, then re-add it to the unchecked list
+      const pastTimestamp = '2020-01-01T00:00:00.000Z';
+      db.prepare('UPDATE shopping_items SET created_at = ?, updated_at = ? WHERE id = ?').run(
+        pastTimestamp,
+        pastTimestamp,
+        item.id
+      );
+
+      // Re-adding via createItem (e.g. selecting from checked item suggestions) updates both createdAt and updatedAt
+      const reAddedItem = createItem(
+        db,
+        {
+          id: item.id,
+          name: item.name,
+          quantity: '3 jars',
+          storeName: item.storeName,
+          checked: false,
+        },
+        shopperUser
+      );
+      expect(reAddedItem.checked).toBe(false);
+      expect(reAddedItem.createdAt).not.toBe(pastTimestamp);
+      expect(reAddedItem.updatedAt).not.toBe(pastTimestamp);
+
+      // Checking and then unchecking via updateItem also updates createdAt and updatedAt
+      updateItem(db, item.id, { checked: true }, shopperUser);
+      db.prepare('UPDATE shopping_items SET created_at = ?, updated_at = ? WHERE id = ?').run(
+        pastTimestamp,
+        pastTimestamp,
+        item.id
+      );
+      const uncheckedAgain = updateItem(db, item.id, { checked: false }, shopperUser);
+      expect(uncheckedAgain.checked).toBe(false);
+      expect(uncheckedAgain.createdAt).not.toBe(pastTimestamp);
+      expect(uncheckedAgain.updatedAt).not.toBe(pastTimestamp);
 
       // Batch offline sync mutations
       const syncResult = syncOfflineMutations(

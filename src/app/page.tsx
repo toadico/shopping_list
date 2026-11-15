@@ -980,6 +980,9 @@ export default function ShoppingListApp() {
             checkedBy: nextChecked ? (currentUser?.id ?? null) : null,
             checkedByName: nextChecked ? (currentUser?.name ?? 'Me (Offline)') : null,
             checkedAt: nextChecked ? now : null,
+            createdBy: !nextChecked ? (currentUser?.id ?? i.createdBy) : i.createdBy,
+            createdByName: !nextChecked ? (currentUser?.name ?? i.createdByName) : i.createdByName,
+            createdAt: !nextChecked ? now : i.createdAt,
             updatedAt: now,
           }
         : i
@@ -1331,8 +1334,8 @@ export default function ShoppingListApp() {
       {newlyIssuedApiKey && (
         <div className="alert alert-success">
           <div className="api-key-banner-title">
-            Welcome, {currentUser.name}! Your non-expiring personal API key has been generated and
-            saved on this device:
+            Welcome, {currentUser.name}! Your personal API key (valid for 90 days and renewed each
+            time you access the system) has been generated and saved on this device:
           </div>
           <code className="api-key-code">
             {newlyIssuedApiKey}
@@ -1455,7 +1458,7 @@ export default function ShoppingListApp() {
                                   )}
                                   <span className="item-meta-text">
                                     {`Added by ${item.createdByName} (${formatDaysCount(
-                                      getDaysElapsed(item.createdAt)
+                                      getDaysElapsed(item.updatedAt || item.createdAt)
                                     )} on list)`}
                                   </span>
                                 </div>

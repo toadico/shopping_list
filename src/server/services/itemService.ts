@@ -256,6 +256,9 @@ export function createItem(
       checked_by = CASE WHEN excluded.checked = 1 THEN COALESCE(excluded.checked_by, shopping_items.checked_by) ELSE NULL END,
       checked_by_name = CASE WHEN excluded.checked = 1 THEN COALESCE(excluded.checked_by_name, shopping_items.checked_by_name) ELSE NULL END,
       checked_at = CASE WHEN excluded.checked = 1 THEN COALESCE(excluded.checked_at, shopping_items.checked_at) ELSE NULL END,
+      created_by = CASE WHEN excluded.checked = 0 THEN excluded.created_by ELSE shopping_items.created_by END,
+      created_by_name = CASE WHEN excluded.checked = 0 THEN excluded.created_by_name ELSE shopping_items.created_by_name END,
+      created_at = CASE WHEN excluded.checked = 0 THEN excluded.created_at ELSE shopping_items.created_at END,
       updated_at = excluded.updated_at`
   ).run(
     id,
@@ -360,6 +363,9 @@ export function updateItem(
   let checkedBy = existing.checked_by;
   let checkedByName = existing.checked_by_name;
   let checkedAt = existing.checked_at;
+  let createdBy = existing.created_by;
+  let createdByName = existing.created_by_name;
+  let createdAt = existing.created_at;
 
   if (input.checked !== undefined) {
     if (input.checked) {
@@ -372,6 +378,11 @@ export function updateItem(
       checkedBy = null;
       checkedByName = null;
       checkedAt = null;
+      if (existing.checked === 1) {
+        createdBy = user.id;
+        createdByName = user.name;
+        createdAt = now;
+      }
     }
   }
 
@@ -379,7 +390,7 @@ export function updateItem(
     `UPDATE shopping_items
      SET name = ?, quantity = ?, notes = ?, store_id = ?, store_name = ?,
          image_data = ?, one_time = ?, checked = ?, checked_by = ?, checked_by_name = ?,
-         checked_at = ?, updated_at = ?
+         checked_at = ?, created_by = ?, created_by_name = ?, created_at = ?, updated_at = ?
      WHERE id = ?`
   ).run(
     name,
@@ -393,6 +404,9 @@ export function updateItem(
     checkedBy,
     checkedByName,
     checkedAt,
+    createdBy,
+    createdByName,
+    createdAt,
     now,
     itemId
   );

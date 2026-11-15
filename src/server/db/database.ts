@@ -48,7 +48,8 @@ export function initializeSchema(db: DbInstance): void {
       status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'disabled', 'revoked')),
       invited_by TEXT,
       created_at TEXT NOT NULL,
-      last_seen_at TEXT
+      last_seen_at TEXT,
+      api_key_expires_at TEXT
     );
 
     CREATE TABLE IF NOT EXISTS invite_tokens (
@@ -104,6 +105,9 @@ export function initializeSchema(db: DbInstance): void {
       WHERE username = 'shopping_admin'
          OR invited_by IN (SELECT id FROM users WHERE username = 'shopping_admin')
     `);
+  }
+  if (!userColumns.some((col) => col.name === 'api_key_expires_at')) {
+    db.exec('ALTER TABLE users ADD COLUMN api_key_expires_at TEXT');
   }
 
   const inviteColumns = db
